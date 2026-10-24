@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory=$true)][string]$Thumbprint,
     [string]$MarkingServer = '',
     [switch]$Diagnose,
+    [switch]$CheckConnection,
     [switch]$Once
 )
 $ErrorActionPreference = 'Stop'
@@ -110,6 +111,35 @@ if ($MarkingServer) {
 }
 $connectionToken = $null
 $headers = $null
+function Get-SignerFailureMessage($Failure, [string]$Stage) {
+    # Never echo exception Message/ErrorDetails/HTTP body: they can contain secrets.
+    $statusCode = $null
+    $cause = $Failure.Exception
+    while ($cause) {
+        if ($cause.PSObject.Properties['Response'] -and $cause.Response) {
+            try { $statusCode = [int]$cause.Response.StatusCode } catch {}
+            if ($statusCode) { break }
+        }
+        $cause = $cause.InnerException
+    }
+    if ($statusCode) {
+        $hint = switch ($statusCode) {
+            403 { 'Signer token rejected. Copy the signer connection token from this NK server (not API KEY). Check that the server is updated.' }
+            401 { 'Authentication rejected. Copy the signer connection token from this NK server.' }
+            404 { 'Signer endpoint not found. Check Server URL and update/restart the NK service.' }
+            422 { if ($Stage -eq 'heartbeat') { 'Check that the same certificate thumbprint is saved in NK admin settings.' } else { 'Server rejected the job data. Check its current state in NK operations.' } }
+            409 { 'Job or lease changed. Check its current state in NK operations.' }
+            500 { 'NK service error. Check the WSL terminal.' }
+            default { 'Check NK service availability and its current configuration.' }
+        }
+        return ('Signing paused: HTTP {0} at {1}. {2}' -f $statusCode, $Stage, $hint)
+    }
+    if ($Stage -eq 'local-sign') {
+        return 'Signing paused at local-sign. Run -Diagnose and check CryptoPro, Rutoken and PIN.'
+    }
+    return ('Signing paused at {0}: no usable HTTP response. Check that the NK service is running and its URL opens in Windows. For loopback issues try 127.0.0.1 instead of localhost.' -f $Stage)
+}
+
 function Send-Json($Path, $Body) {
     Invoke-RestMethod -Method Post -Uri ($activeServer + $Path) -Headers $headers -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 20 -Compress)))
 }
@@ -119,7 +149,7 @@ try {
 foreach ($targetUrl in $targetUrls) {
     $secret = Read-Host ('Signer connection token for ' + $targetUrl) -AsSecureString
     $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)
-    try { $connectionToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
+    try { $connectionToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr).Trim() }
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
     $targets += @{ url=$targetUrl; headers=@{ Authorization='Bearer ' + $connectionToken }; nk=($targetUrl -eq $Server) }
     $secret=$null; $connectionToken=$null
@@ -130,12 +160,19 @@ foreach ($targetUrl in $targetUrls) {
         $activeServer = $target.url
         $headers = $target.headers
         $allowed = if ($target.nk) { $nkAllowed } else { $bmAllowed }
+        $stage = 'heartbeat'
         try {
             Send-Json '/api/signer/heartbeat' @{
                 thumbprint=$Thumbprint;
                 expires=$cert.NotAfter.ToUniversalTime().ToString('o');
                 status='Ready'
             } | Out-Null
+            if (-not $target.connected) {
+                Write-Host ('Connected to signer endpoint: ' + $activeServer)
+                $target.connected = $true
+            }
+            if ($CheckConnection) { continue }
+            $stage = 'next'
             $job = Send-Json '/api/signer/next' @{}
             if ($job -and $job.id) {
                 if ($allowed -cnotcontains $job.kind) { throw 'Unsupported signing job' }
@@ -150,7 +187,9 @@ foreach ($targetUrl in $targetUrls) {
                 if ($cert.NotAfter -lt (Get-Date)) { throw 'Certificate expired' }
 
                 # The VBS helper signs exact bytes via Base64 and locally verifies CMS.
+                $stage = 'local-sign'
                 $signature = Invoke-LocalCadesSigner -PayloadBase64 $job.payload_base64 -Detached ([bool]$job.detached)
+                $stage = 'result'
                 Send-Json '/api/signer/result' @{
                     id=$job.id;lease=$job.lease;sha256=$job.sha256;
                     signature=$signature;thumbprint=$Thumbprint
@@ -160,7 +199,10 @@ foreach ($targetUrl in $targetUrls) {
         }
         catch {
             # No HTTP body, payload, CMS, PIN, server token or stack dump in logs.
-            Write-Warning 'Signing paused. Check server connection, CryptoPro, Rutoken and PIN. No operation is resent by this agent.'
+            $failureMessage = Get-SignerFailureMessage $_ $stage
+            $target.connected = $false
+            if ($CheckConnection) { throw $failureMessage }
+            Write-Warning $failureMessage
             try {
                 Send-Json '/api/signer/heartbeat' @{
                     thumbprint=$Thumbprint;
@@ -170,8 +212,8 @@ foreach ($targetUrl in $targetUrls) {
             } catch {}
         }
       }
-        if (-not $Once) { Start-Sleep -Seconds 5 }
-    } while (-not $Once)
+        if (-not ($Once -or $CheckConnection)) { Start-Sleep -Seconds 5 }
+    } while (-not ($Once -or $CheckConnection))
 }
 finally {
     $connectionToken = $null
