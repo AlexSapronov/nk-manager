@@ -42,3 +42,10 @@ button[aria-busy=true] { cursor: progress; }
   .registry { min-height: 410px; }
   .drawer-head h2 { font-size: 20px; }
 }
+/* Long section names must never widen the approved sidebar. */
+@media (min-width: 701px) {
+  .sidebar nav { min-width: 0; width: 100%; }
+  .sidebar nav a { min-width: 0; max-width: 100%; width: 100%; overflow-wrap: anywhere; }
+  .sidebar nav a span:first-child { flex: 0 0 19px; }
+  .sidebar nav a .nav-label { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+}
