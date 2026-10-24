@@ -1,0 +1,49 @@
+{
+  "scope": "real local HTTP/SQLite service, isolated synthetic test input; no NK integration",
+  "checks": [
+    {
+      "name": "Login, empty real database and employee navigation",
+      "status": "passed"
+    },
+    {
+      "name": "Card created and retained after page reload",
+      "status": "passed"
+    },
+    {
+      "name": "Real XLSX mapping, preview, confirmation and import",
+      "status": "passed"
+    },
+    {
+      "name": "Claim and persistent edit of imported source attributes",
+      "status": "passed"
+    },
+    {
+      "name": "Download analysis ZIP containing actual saved cards and XLSX",
+      "status": "passed"
+    },
+    {
+      "name": "Real batch results, logout and separate admin password",
+      "status": "passed"
+    },
+    {
+      "name": "Import, approve and apply a real local category template via browser",
+      "status": "passed"
+    },
+    {
+      "name": "Shared themes and desktop/mobile layouts of the real service",
+      "status": "passed"
+    }
+  ],
+  "screenshots": [
+    "live-registry.png",
+    "live-editor.png",
+    "live-admin.png",
+    "live-dark.png",
+    "live-1440x900.png",
+    "live-1920x1080.png",
+    "live-390x844.png"
+  ],
+  "errors": [],
+  "status": "passed",
+  "browser": "153.0.8010.0"
+}

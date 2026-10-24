@@ -3,4 +3,8 @@ __pycache__/
 *.log
 .env
 data/
+.venv/
+backups/
+*.sqlite3*
+tests/.runtime/
 test-results/
