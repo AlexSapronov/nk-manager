@@ -17,3 +17,6 @@ jobs:
             exit 1
           }
           Write-Host 'PowerShell syntax OK. Hardware CryptoPro/Rutoken is not tested by this job.'
+      - name: Test connection diagnostics without hardware or NK
+        shell: powershell
+        run: .\tests\signer-connection.ps1
