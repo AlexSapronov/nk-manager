@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from nk_manager import __version__
 from nk_manager.service import Conflict, Service, candidates
-from nk_manager.store import Store, audit, now, uid, verify_password
+from nk_manager.store import Store, audit, dumps, now, uid, verify_password
 from nk_manager.nk import Engine
 
 ROOT = Path(__file__).resolve().parent
