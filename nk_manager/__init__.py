@@ -1,3 +1,3 @@
 """Persistent local National Catalog workspace. No speculative NK API methods."""
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"

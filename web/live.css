@@ -50,3 +50,38 @@ button[aria-busy=true] { cursor: progress; }
   .sidebar nav a .nav-label { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 }
 .drawer-body .tabs { overflow-x: auto; flex-shrink: 0; }
+/* Guided preparation dialog: product identities and changes must stay readable. */
+dialog.template-dialog { max-width: 1120px; width: calc(100% - 32px); }
+.template-dialog .dialog-body { max-height: calc(100dvh - 210px); }
+.template-dialog .dialog-footer { flex-wrap: wrap; }
+.flow-summary { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; }
+.flow-summary > div { padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.flow-summary b { display: block; font-size: 24px; color: var(--primary); }
+.flow-summary span { font-size: 12px; color: var(--muted); }
+.flow-select-all { display: flex; gap: 9px; align-items: center; margin: 16px 0; font-size: 13px; }
+.template-flow-table { table-layout: fixed; white-space: normal; }
+.template-flow-table .flow-check { width: 42px; }
+.template-flow-table .flow-product { width: 35%; }
+.template-flow-table .flow-fields { width: 31%; }
+.template-flow-table th, .template-flow-table td { white-space: normal; overflow-wrap: anywhere; height: auto; vertical-align: top; padding: 12px 9px; }
+.flow-identity strong, .flow-identity span, .flow-identity small, .flow-duplicates strong, .flow-duplicates small { display: block; }
+.flow-identity small, .flow-identity span, .flow-duplicates small { margin-top: 5px; font-size: 12px; color: var(--muted); }
+.flow-change + .flow-change { margin-top: 12px; }
+.flow-change span, .flow-change b { display: block; }
+.flow-change span { color: var(--muted); margin-bottom: 3px; }
+.flow-duplicates summary { cursor: pointer; color: var(--warn); }
+.flow-duplicates > div { padding: 10px 0; border-bottom: 1px solid var(--border-soft); }
+.flow-ok { color: var(--ok); }
+.flow-next-note { padding: 10px 12px; background: var(--surface-2); border-radius: 8px; font-size: 13px; }
+.flow-unchanged, .flow-saved { margin-top: 18px; font-size: 13px; }
+.flow-unchanged summary, .flow-saved summary { cursor: pointer; }
+.flow-unchanged li, .flow-saved li { margin: 8px 0; overflow-wrap: anywhere; }
+#plan-reason-area { margin-top: 18px; padding: 14px; border: 1px solid var(--warn-border); border-radius: 10px; }
+.workflow-help li { margin-bottom: 14px; line-height: 1.6; }
+@media(max-width:700px) {
+  .flow-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .template-flow-table .flow-product { width: 34%; }
+  .template-flow-table .flow-fields { width: 31%; }
+  .template-flow-table th, .template-flow-table td { padding: 10px 5px; font-size: 11px; }
+  .template-dialog .dialog-footer button { flex: 1; }
+}

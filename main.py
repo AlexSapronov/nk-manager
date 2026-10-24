@@ -248,7 +248,7 @@ def create_app(data_directory=None):
     def apply_plan(id: str, data: dict, user=Depends(session)):
         if data.get("confirmed") is not True:
             raise ValueError("Нужно явное подтверждение")
-        return service.apply_template_plan(user["username"], id, str(data.get("duplicate_reason", "")))
+        return service.apply_template_plan(user["username"], id, str(data.get("duplicate_reason", "")), data.get("ids"))
 
     @app.get("/api/admin/users")
     def users(user=Depends(admin)):
