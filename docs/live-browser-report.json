@@ -26,6 +26,10 @@
       "status": "passed"
     },
     {
+      "name": "11 built-in presets available and create local draft with modal OKPD2",
+      "status": "passed"
+    },
+    {
       "name": "Import, approve and apply a real local category template via browser",
       "status": "passed"
     },

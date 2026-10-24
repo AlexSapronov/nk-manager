@@ -28,6 +28,10 @@ def create_app(data_directory=None):
     store = Store(data_directory or os.environ.get("NK_DATA", ROOT / "data"))
     service = Service(store)
     nk = Engine(store)
+    from nk_manager.presets import install
+    from nk_manager.nk import recover_missing_pn
+    install(store)
+    recover_missing_pn(store)
     @asynccontextmanager
     async def lifespan(app):
         nk.start()
@@ -220,7 +224,9 @@ def create_app(data_directory=None):
 
     @app.get("/api/templates")
     def templates(user=Depends(session)):
-        return store.all("SELECT * FROM templates ORDER BY created DESC")
+        from nk_manager.presets import installed
+        builtin_ids = installed(store)
+        return [{**t,"builtin":t["id"] in builtin_ids} for t in store.all("SELECT * FROM templates ORDER BY created DESC")]
 
     @app.post("/api/templates")
     def import_template(data: dict, user=Depends(session)):
