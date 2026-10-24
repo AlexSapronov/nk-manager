@@ -24,7 +24,7 @@ function badge(c){return `<span class="badge ${c.dirty?'amber':''}">${esc(c.exte
 function leave(){return !state.dirty||window.confirm('Есть несохранённый ввод. Закрыть без сохранения?');}
 async function reloadCards(){state.cards=await api('/api/cards');}
 async function render(){
- $('#nav').innerHTML=Object.keys(labels).filter(p=>p!=='admin'||state.user.admin).map(p=>`<a href="#${p}" class="${p===state.page?'active':''}"><span>${icons[p]}</span>${labels[p]}</a>`).join('');$('#breadcrumb').textContent=labels[state.page];
+ $('#nav').innerHTML=Object.keys(labels).filter(p=>p!=='admin'||state.user.admin).map(p=>`<a href="#${p}" class="${p===state.page?'active':''}"><span>${icons[p]}</span><span class="nav-label">${labels[p]}</span></a>`).join('');$('#breadcrumb').textContent=labels[state.page];
  try{if(['cards','drafts'].includes(state.page))registry();else if(state.page==='import')renderImport();else if(state.page==='templates')await templates();else if(state.page==='batches')await batches();else if(state.page==='admin')await admin();}catch(error){showError(error);}
 }
 function filtered(){const q=state.query.toLocaleLowerCase();return state.cards.filter(c=>(!q||[c.pn,c.name,c.gtin].some(v=>v.toLocaleLowerCase().includes(q)))&&(!state.category||c.category===state.category)&&(!state.tnved||c.tnved===state.tnved)&&(state.filter==='archive'?c.archived:!c.archived)&&(state.page!=='drafts'||c.dirty||!c.external_status||/чернов|измен/i.test(c.external_status))&&(state.filter!=='dirty'||c.dirty));}
