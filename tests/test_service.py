@@ -65,7 +65,7 @@ def test_empty_service_is_persistent_not_demo(app):
         headers = login(client)
         assert client.get("/api/cards").json() == []
         page = client.get("/")
-        assert "ЛОКАЛЬНАЯ РАБОТА" in page.text
+        assert "МЕНЕДЖЕР НК" in page.text
         assert "/assets/live.js?v=" in page.text
         assert "script-src 'self'" in page.headers["content-security-policy"]
         assert client.get("/prototype/").status_code == 404

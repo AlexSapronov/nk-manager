@@ -49,3 +49,4 @@ button[aria-busy=true] { cursor: progress; }
   .sidebar nav a span:first-child { flex: 0 0 19px; }
   .sidebar nav a .nav-label { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 }
+.drawer-body .tabs { overflow-x: auto; flex-shrink: 0; }
