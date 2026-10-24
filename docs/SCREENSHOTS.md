@@ -19,3 +19,14 @@
 - [Партии](screenshots/batches.png)
 - [Администрирование](screenshots/admin.png)
 - [Конфликт ревизий](screenshots/revision-conflict.png)
+
+## Тёмная тема общей системы
+
+| Размер | Реестр |
+|---|---|
+| 1366×768 | [реестр](screenshots/registry-dark-1366x768.png) |
+| 1440×900 | [реестр](screenshots/registry-dark-1440x900.png) |
+| 1920×1080 | [реестр](screenshots/registry-dark-1920x1080.png) |
+| 390×844 | [реестр](screenshots/registry-dark-390x844.png) |
+
+[Правая панель](screenshots/drawer-dark-1366x768.png) · [Диалог различий](screenshots/template-diff-dark.png).

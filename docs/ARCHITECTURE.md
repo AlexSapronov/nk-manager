@@ -29,7 +29,7 @@ FastAPI / Python 3.12, обычный JavaScript, SQLite WAL при умерен
 
 Ссылки: [marking-bm](https://github.com/AlexSapronov/marking-bm/tree/ce77a1cf720ff62530988b091c29c2dc0ae69ed6), [km-split](https://github.com/AlexSapronov/km-split), [gis-trueapi](https://github.com/AlexSapronov/gis-trueapi).
 
-Никакие модули доноров не скопированы и не изменены. Прототип написан заново; перенос инфраструктуры — следующий этап. Полный аудит доноров не заявляется.
+Backend-модули доноров не скопированы и не изменены. Общие CSS-токены перенесены из marking-bm и сверены с двумя остальными проектами; локальный theme.js повторяет общий контракт темы (см. DESIGN-SYSTEM). Прототип написан заново; перенос инфраструктуры — следующий этап. Полный аудит доноров не заявляется.
 
 ## Решение по подписанту
 

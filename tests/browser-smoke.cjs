@@ -33,7 +33,7 @@ async function main(){
    args: process.env.CHROMIUM_ARGS?JSON.parse(process.env.CHROMIUM_ARGS):[]});
  const errors=[];
  try {
- const context=await browser.newContext({viewport:{width:1366,height:768}});
+ const context=await browser.newContext({viewport:{width:1366,height:768},colorScheme:'light'});
  const page=await context.newPage();
  page.on('pageerror',e=>errors.push(e.message));
  page.on('request',r=>{if(!r.url().startsWith(origin))evidence.externalRequests.push(r.url());});
@@ -109,6 +109,49 @@ async function main(){
  await page.locator('[data-filter="archive"]').click();assert(await page.locator('[data-open="1"]').isVisible());check('Local stop requires a reason and retains card in archive');
  await page.goto(origin+'/prototype/preview.html');await visible('.registry');
  assert.equal(evidence.externalRequests.length,0);assert.deepEqual(errors,[]);check('Standalone HTML loads without external requests or JavaScript errors');
+ // The suite palette and preference match the existing marking applications.
+ assert.deepEqual(await page.evaluate(()=>{
+   const css=getComputedStyle(document.documentElement);
+   return ['--bg','--text','--primary','--border'].map(k=>css.getPropertyValue(k).trim());
+ }),['#eef1f5','#111827','#075ad3','#8392a5']);
+ await page.locator('#theme-toggle').click();
+ await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
+ assert.equal(await page.evaluate(()=>localStorage.getItem('gis_theme')),'dark');
+ assert.equal(await page.locator('#theme-toggle').getAttribute('aria-label'),'Светлая тема');
+ await page.reload();
+ assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
+ assert.deepEqual(await page.evaluate(()=>{
+   const css=getComputedStyle(document.documentElement);
+   return ['--bg','--text','--primary','--border'].map(k=>css.getPropertyValue(k).trim());
+ }),['#080f18','#f8fafc','#80b7ff','#61738a']);
+ for(const [width,height] of [[1366,768],[1440,900],[1920,1080],[390,844]]){
+   await page.setViewportSize({width,height});
+   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+   await shot(`registry-dark-${width}x${height}`);
+ }
+ await page.setViewportSize({width:1366,height:768});
+ await page.locator('[data-open="1"]').click();await visible('#drawer');await shot('drawer-dark-1366x768');
+ await page.locator('[data-tab="attributes"]').click();
+ assert.equal(await page.locator('#field-country').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(21, 32, 45)');
+ await page.locator('#close-drawer').click();
+ await page.locator('nav a[href="#templates"]').click();await page.locator('#template-diff').click();
+ assert.equal(await page.locator('#dialog').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(21, 32, 45)');
+ await shot('template-diff-dark');await page.locator('#dialog [data-close]').first().click();
+ const other=await context.newPage();await other.goto(origin+'/prototype/');
+ assert.equal(await other.locator('html').getAttribute('data-theme'),'dark');
+ await page.locator('#theme-toggle').click();
+ await other.waitForFunction(()=>document.documentElement.dataset.theme==='light');await other.close();
+ check('Shared light/dark tokens, accessible toggle, persistence, cross-tab preference and dark surfaces');
+ await page.evaluate(()=>localStorage.removeItem('gis_theme'));
+ await page.emulateMedia({colorScheme:'dark'});await page.reload();
+ assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
+ await page.emulateMedia({colorScheme:'light'});
+ await page.waitForFunction(()=>document.documentElement.dataset.theme==='light');
+ await page.addInitScript(()=>{Storage.prototype.getItem=()=>{throw new Error('Storage disabled');};Storage.prototype.setItem=()=>{throw new Error('Storage disabled');};});
+ await page.reload();await page.locator('#theme-toggle').click();
+ assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
+ check('System theme follows OS when unset; manual switching works with blocked storage');
+ assert.deepEqual(errors,[]);assert.equal(evidence.externalRequests.length,0);
  evidence.status='passed';evidence.browser=browser.version();evidence.finished=new Date().toISOString();
  }finally{await browser.close();}
 }

@@ -1,6 +1,6 @@
 {
   "scope": "static UX prototype only",
-  "started": "2026-10-24T20:03:04.109Z",
+  "started": "2026-10-24T20:14:14.604Z",
   "checks": [
     {
       "name": "Initial registry and employee navigation",
@@ -53,6 +53,14 @@
     {
       "name": "Standalone HTML loads without external requests or JavaScript errors",
       "status": "passed"
+    },
+    {
+      "name": "Shared light/dark tokens, accessible toggle, persistence, cross-tab preference and dark surfaces",
+      "status": "passed"
+    },
+    {
+      "name": "System theme follows OS when unset; manual switching works with blocked storage",
+      "status": "passed"
     }
   ],
   "screenshots": [
@@ -71,10 +79,16 @@
     "template-diff.png",
     "batches.png",
     "admin.png",
-    "revision-conflict.png"
+    "revision-conflict.png",
+    "registry-dark-1366x768.png",
+    "registry-dark-1440x900.png",
+    "registry-dark-1920x1080.png",
+    "registry-dark-390x844.png",
+    "drawer-dark-1366x768.png",
+    "template-diff-dark.png"
   ],
   "externalRequests": [],
   "status": "passed",
   "browser": "153.0.8010.0",
-  "finished": "2026-10-24T20:03:23.692Z"
+  "finished": "2026-10-24T20:14:21.482Z"
 }

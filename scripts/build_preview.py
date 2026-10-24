@@ -7,6 +7,10 @@ SOURCE = ROOT / "prototype"
 
 def build():
     html = (SOURCE / "index.html").read_text(encoding="utf-8")
+    html = html.replace('<script src="theme.js"></script>',
+                        '<script>' + (SOURCE / 'theme.js').read_text(encoding='utf-8') + '</script>')
+    html = html.replace('<link rel="stylesheet" href="palette.css">',
+                        '<style>' + (SOURCE / 'palette.css').read_text(encoding='utf-8') + '</style>')
     html = html.replace('<link rel="stylesheet" href="style.css">',
                         '<style>' + (SOURCE / 'style.css').read_text(encoding='utf-8') + '</style>')
     html = html.replace('<script src="app.js"></script>',
