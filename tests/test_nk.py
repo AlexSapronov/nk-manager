@@ -296,3 +296,24 @@ def test_signer_endpoint_requires_separate_bearer_without_browser_origin(tmp_pat
     token=app.state.nk.config()['signer_token']
     assert client.post('/api/signer/next',json={},headers={'Authorization':'Bearer '+token}).status_code==200
     assert client.post('/api/admin/nk/config',json={}).status_code==403
+
+
+def test_signer_heartbeat_persists_and_rejects_wrong_cert(tmp_path,monkeypatch):
+    from main import create_app
+    from fastapi.testclient import TestClient
+    monkeypatch.setenv('NK_PUBLIC_URL','http://localhost:8020')
+    app=create_app(tmp_path)
+    app.state.nk.save_config('a',{'api_key':'test-key-secret','thumbprint':'A'*40})
+    client=TestClient(app,base_url='http://localhost:8020')
+    auth={'Authorization':'Bearer '+app.state.nk.config()['signer_token']}
+    body={'thumbprint':'A'*40,'expires':'2027-02-05T11:05:00Z','status':'Ready'}
+    assert client.post('/api/signer/heartbeat',json=body).status_code==403
+    response=client.post('/api/signer/heartbeat',json=body,headers=auth)
+    assert response.status_code==200
+    heartbeat=app.state.nk.status()['signer']
+    assert heartbeat['thumbprint']==body['thumbprint']
+    assert heartbeat['expires']==body['expires']
+    assert heartbeat['status']=='Ready' and heartbeat['time']
+    assert client.post('/api/signer/heartbeat',json={**body,'thumbprint':'B'*40},headers=auth).status_code==422
+    assert app.state.nk.status()['signer']==heartbeat
+    assert client.post('/api/signer/next',json={},headers=auth).json()=={}

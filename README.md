@@ -51,7 +51,7 @@ python3 -m venv .venv && .venv/bin/python -m pip install -r requirements-lock.tx
 
 ```bash
 .venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m pytest tests/test_service.py tests/test_nk.py -q
+.venv/bin/python -m pytest tests -q
 npm ci
 npx playwright install chromium
 node tests/live-browser.cjs
