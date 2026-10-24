@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Менеджер НК · прототип</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<div class="prototype-bar"><strong>UI-ПРОТОТИП</strong><span>Вымышленные данные · без подключения к НК · изменения только в этой вкладке</span><button id="scenarios">Сценарии проверки</button></div>
+<div class="shell">
+<aside class="sidebar"><a class="brand" href="#cards"><span class="brand-icon">НК</span><span>Менеджер<br><b>каталога</b></span></a><div class="workspace-label">РАБОЧЕЕ ПРОСТРАНСТВО</div><nav id="nav"></nav><div class="sidebar-bottom"><span class="avatar">АС</span><div>Александр<span class="muted">Сотрудник · макет</span></div></div></aside>
+<div class="workspace"><header><div><span class="muted">Национальный каталог</span><span class="header-divider">/</span><b id="breadcrumb">Карточки</b></div><div class="header-right"><span class="connection">○ НК не подключён</span><button id="role-switch" class="subtle">Режим просмотра: сотрудник</button></div></header><main id="main"></main></div>
+</div><aside id="drawer" class="drawer" hidden aria-label="Карточка товара"></aside><dialog id="dialog"></dialog><div id="toast" role="status" hidden></div><script src="app.js"></script></body></html>

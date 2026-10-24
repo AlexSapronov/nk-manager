@@ -1,0 +1,80 @@
+{
+  "scope": "static UX prototype only",
+  "started": "2026-10-24T20:03:04.109Z",
+  "checks": [
+    {
+      "name": "Initial registry and employee navigation",
+      "status": "passed"
+    },
+    {
+      "name": "Four required viewport sizes, screenshots and visible drawer actions",
+      "status": "passed"
+    },
+    {
+      "name": "125 percent space approximation, not native browser zoom",
+      "status": "passed"
+    },
+    {
+      "name": "Search preserved; expand, input across tabs, save and next card",
+      "status": "passed"
+    },
+    {
+      "name": "Unsaved input guard allows cancel and explicit discard",
+      "status": "passed"
+    },
+    {
+      "name": "Selection persists across pages; exact count in template and sending previews",
+      "status": "passed"
+    },
+    {
+      "name": "Duplicate decision requires a reason",
+      "status": "passed"
+    },
+    {
+      "name": "Four-step Excel review flow",
+      "status": "passed"
+    },
+    {
+      "name": "Template diff and unknown mutation outcome explanation",
+      "status": "passed"
+    },
+    {
+      "name": "Admin preview navigation, signer unavailable and employee menu separation",
+      "status": "passed"
+    },
+    {
+      "name": "Empty, offline input preservation and revision conflict views",
+      "status": "passed"
+    },
+    {
+      "name": "Local stop requires a reason and retains card in archive",
+      "status": "passed"
+    },
+    {
+      "name": "Standalone HTML loads without external requests or JavaScript errors",
+      "status": "passed"
+    }
+  ],
+  "screenshots": [
+    "registry-1366x768.png",
+    "drawer-1366x768.png",
+    "registry-1440x900.png",
+    "drawer-1440x900.png",
+    "registry-1920x1080.png",
+    "drawer-1920x1080.png",
+    "registry-390x844.png",
+    "drawer-390x844.png",
+    "registry-1366-at-125-percent-space.png",
+    "bulk-template-preview.png",
+    "duplicate-review.png",
+    "excel-confirmation.png",
+    "template-diff.png",
+    "batches.png",
+    "admin.png",
+    "revision-conflict.png"
+  ],
+  "externalRequests": [],
+  "status": "passed",
+  "browser": "153.0.8010.0",
+  "finished": "2026-10-24T20:03:23.692Z"
+}

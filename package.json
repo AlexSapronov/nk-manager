@@ -1,0 +1,8 @@
+{
+  "name": "nk-manager-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Static UX review prototype. No National Catalog integration.",
+  "scripts": {"test": "node tests/browser-smoke.cjs"},
+  "devDependencies": {"playwright": "1.61.1"}
+}
