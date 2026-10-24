@@ -53,7 +53,13 @@ async function main(){
  for(const width of [1366,1100,900]){await page.setViewportSize({width,height:768});assert(await page.evaluate(()=>{const side=document.querySelector('.sidebar').getBoundingClientRect();return [...document.querySelectorAll('.sidebar nav a')].every(a=>a.getBoundingClientRect().right<=side.right+1&&a.scrollWidth<=a.clientWidth+1);}),'Admin navigation must fit inside sidebar at '+width);}
  await page.setViewportSize({width:1366,height:768});
 
- await page.locator('nav a[href="#templates"]').click();await visible('#import-template');await page.locator('#import-template').click();
+ await page.locator('nav a[href="#templates"]').click();await visible('#import-template');
+ assert.equal(await page.locator('[data-preset-create]').count(),11);
+ const preset=page.locator('.template-card').filter({has:page.getByRole('heading',{name:'Эталон опубликованных — 8536901000',exact:true})});
+ await preset.locator('[data-preset-create]').click();await visible('#field-pn');assert.equal(await page.locator('#field-tnved').inputValue(),'8536901000');
+ await page.locator('[data-tab="attributes"]').click();assert.equal(await page.locator('[data-attribute="Код ОКПД2 [#3961]"]').inputValue(),'27.33.13.110');
+ page.once('dialog',d=>d.accept());await page.locator('#close-drawer').click();check('11 built-in presets available and create local draft with modal OKPD2');
+ await page.locator('#import-template').click();
  const template={schema_version:1,name:'Шаблон соединителей',tnved:'8536901000',category:'Соединители',card_type:'Единичный',rules:[{attribute:'Материал',mode:'fill_if_empty',value:'Металл'}]};
  await page.locator('#template-json').fill(JSON.stringify(template));await page.locator('#save-template').click();await visible('[data-approve]');page.once('dialog',d=>d.accept());await page.locator('[data-approve]').click();await page.waitForFunction(()=>document.querySelector('.template-card .badge')?.textContent.includes('Активен локально'));
  await page.locator('nav a[href="#cards"]').click();await visible('.registry');await page.locator('#search').fill('CONNECTOR777');await page.locator('[data-select]').check();await page.locator('#apply-templates').click();await visible('#apply-plan');assert((await page.locator('#dialog').innerText()).includes('Материал → Металл'));await page.locator('#apply-plan').click();await page.waitForFunction(()=>document.querySelector('#dialog h2')?.textContent==='Результат дозаполнения');await page.locator('#dialog [data-close]').first().click();

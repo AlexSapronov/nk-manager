@@ -99,7 +99,28 @@ def digest(value):
 
 
 def pn_attribute(name):
-    return re.sub(r"[^\w]","",str(name).lower()) in ("модель","модельартикул","артикул","артикулпроизводителя","pn")
+    return re.sub(r"[^\w]","",str(name).lower()) in ("модель","модельартикул","модельартикулпроизводителя","артикул","артикулпроизводителя","pn")
+
+
+def model_attribute(attr):
+    return str(attr.get("attr_id")) == "13914" or pn_attribute(attr.get("attr_name"))
+
+
+def source_pn(raw):
+    official = [a for a in raw.get("good_attrs", []) if str(a.get("attr_id")) == "13914"]
+    records = official or [a for a in raw.get("good_attrs", []) if model_attribute(a)]
+    brand = str(raw.get("brand_name") or "").strip().casefold()
+    values = list(dict.fromkeys(str(a.get("attr_value") or "").strip() for a in records if str(a.get("attr_value") or "").strip() and str(a.get("attr_value") or "").strip().casefold() != brand))
+    return values[0] if len(values) == 1 else ""
+
+
+def recover_missing_pn(store):
+    with store.transaction() as db:
+        for row in db.execute("SELECT c.id,n.raw FROM cards c JOIN nk_cards n ON n.card_id=c.id WHERE c.pn='' AND c.dirty=0 AND NOT EXISTS(SELECT 1 FROM nk_jobs j WHERE j.card_id=c.id AND j.state NOT IN ('confirmed','failed','cancelled'))").fetchall():
+            value = source_pn(json.loads(row["raw"]))
+            if value:
+                db.execute("UPDATE cards SET pn=?,revision=revision+1,updated=? WHERE id=?", (value,now(),row["id"]))
+                audit(db,"system","nk_pn_recovered",row["id"],{"attribute_id":13914})
 
 
 class Engine:
@@ -198,7 +219,7 @@ class Engine:
             if attr.get("attr_value_type"):
                 attrs[key+"::unit"]=str(attr["attr_value_type"])
             mapping[key] = attr
-        model = next((str(a.get("attr_value") or "") for a in raw.get("good_attrs",[]) if pn_attribute(a.get("attr_name")) and a.get("attr_value")), "")
+        model = source_pn(raw)
         ids = raw.get("identified_by", [])
         gtin = next((str(i["value"]) for i in ids if i.get("type") == "gtin" and i.get("level") == "trade-unit"), "")
         tnved = next((str(a["attr_value"]) for a in raw.get("good_attrs", []) if str(a.get("attr_id")) == "13933"), str(raw.get("tnved", "")))
@@ -292,7 +313,7 @@ class Engine:
                 for key, attr in mapping.items():
                     value = card["attributes"].get(key, str(attr.get("attr_value") or ""))
                     unit=card["attributes"].get(key+"::unit",str(attr.get("attr_value_type") or ""))
-                    if pn_attribute(attr.get("attr_name")) and card["pn"] != str(attr.get("attr_value") or ""):
+                    if model_attribute(attr) and source_pn(raw) and str(attr.get("attr_value") or "").strip() == source_pn(raw) and card["pn"] != source_pn(raw):
                         value = card["pn"]
                     if value != str(attr.get("attr_value") or "") or unit!=str(attr.get("attr_value_type") or ""):
                         if not value:
@@ -375,8 +396,8 @@ class Engine:
             if raw:
                 # PN edits cannot silently remain local while an unrelated feed
                 # is reported as fully applied.
-                model=next((str(a.get("attr_value") or "") for a in raw.get("good_attrs",[]) if pn_attribute(a.get("attr_name"))),"")
-                model_ids={str(a["attr_id"]) for a in schema if pn_attribute(a.get("attr_name"))}
+                model=source_pn(raw)
+                model_ids={str(a["attr_id"]) for a in schema if model_attribute(a)}
                 if card["pn"]!=model and not any(str(a["attr_id"]) in model_ids and a["attr_value"]==card["pn"] for a in entry["good_attrs"]):
                     raise ValueError("PN не связан с атрибутом модели НК. Загрузите поля категории и укажите модель")
             return self.enqueue(actor, "save", {"entry":entry,"base":digest(raw) if raw else None,"reason":options.get("duplicate_reason","")}, card)

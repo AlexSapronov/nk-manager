@@ -10,6 +10,7 @@ from openpyxl import Workbook
 
 from .excel import read_workbook, valid_gtin
 from .store import audit, dumps, now, uid
+from . import presets
 
 
 class Conflict(ValueError):
@@ -294,7 +295,7 @@ class Service:
 
     def import_template(self, actor, body):
         if not isinstance(body, dict) or body.get("schema_version") != 1:
-            raise ValueError("Нужен JSON-объект с schema_version=1")
+            raise ValueError("Нужен один JSON-шаблон с schema_version=1. ZIP и аналитический отчёт не подходят. Встроенные шаблоны уже доступны в разделе Шаблоны.")
         for key in ("name", "tnved", "category", "card_type"):
             if not isinstance(body.get(key), str) or len(body[key]) > 500:
                 raise ValueError(f"Нужно строковое поле {key}")
@@ -334,7 +335,7 @@ class Service:
             for card in db.execute("SELECT attributes FROM cards WHERE tnved=? AND category=? AND card_type=?", (template["tnved"], template["category"], template["card_type"])):
                 known.update(json.loads(card["attributes"]))
             unknown = [r["attribute"] for r in json.loads(template["body"])["rules"] if r["attribute"] not in known]
-            if unknown:
+            if unknown and id not in presets.installed(self.store):
                 raise ValueError("В источниках этой категории не найдены поля: "+", ".join(unknown))
             db.execute("UPDATE templates SET status='inactive' WHERE tnved=? AND category=? AND card_type=? AND status='active'", (template["tnved"], template["category"], template["card_type"]))
             db.execute("UPDATE templates SET status='active',approved_by=? WHERE id=?", (actor, id))
@@ -342,13 +343,16 @@ class Service:
 
     def template_plan(self, actor, ids):
         selected = set(ids)
-        templates = self.store.all("SELECT * FROM templates WHERE status='active'")
+        templates = self.store.all("SELECT * FROM templates WHERE status='active' ORDER BY created DESC")
+        builtins = presets.installed(self.store)
         entries = []
         all_cards = self.cards()
         for card in all_cards:
             if card["id"] not in selected:
                 continue
             matching = [t for t in templates if (t["tnved"], t["category"], t["card_type"]) == (card["tnved"], card["category"], card["card_type"])]
+            custom = [t for t in matching if t["id"] not in builtins]
+            matching = custom or [t for t in templates if t["id"] in builtins and presets.matches(builtins[t["id"]], card)] or matching
             changes = {}
             message = "Нет подходящего активного шаблона"
             if card["archived"] or card["owner"] not in ("", actor):
@@ -356,8 +360,10 @@ class Service:
                 message = "Остановлена или взята другим сотрудником"
             if matching:
                 body = json.loads(matching[0]["body"])
+                if matching[0]["id"] in builtins:
+                    changes = presets.changes(builtins[matching[0]["id"]], card)
                 for rule in body["rules"]:
-                    if rule["mode"] == "fill_if_empty" and rule["attribute"] in card["attributes"] and not card["attributes"][rule["attribute"]].strip():
+                    if matching[0]["id"] not in builtins and rule["mode"] == "fill_if_empty" and rule["attribute"] in card["attributes"] and not card["attributes"][rule["attribute"]].strip():
                         changes[rule["attribute"]] = rule["value"]
                 message = "Заполнить только пустые поля" if changes else "Нет изменений"
             entries.append({"id": card["id"], "pn": card["pn"], "revision": card["revision"], "changes": changes, "template_id": matching[0]["id"] if matching else None,
@@ -369,6 +375,7 @@ class Service:
 
     def apply_template_plan(self, actor, id, reason):
         result = []
+        builtins = presets.installed(self.store)
         with self.store.transaction() as db:
             plan = db.execute("SELECT * FROM plans WHERE id=? AND actor=?", (id, actor)).fetchone()
             if not plan or plan["applied"]:
@@ -392,7 +399,8 @@ class Service:
                     result.append({"pn":entry["pn"],"status":"conflict","message":"Выполняется операция НК"})
                     continue
                 for key, value in entry["changes"].items():
-                    if key in attrs and not attrs[key].strip():
+                    can_add = entry["template_id"] in builtins and presets.attribute_id(key) in presets.AUTO_IDS
+                    if (key in attrs or can_add) and not attrs.get(key, "").strip():
                         attrs[key] = value
                 db.execute("UPDATE cards SET attributes=?,dirty=1,owner=?,revision=revision+1,updated=? WHERE id=?", (dumps(attrs), actor, now(), entry["id"]))
                 audit(db, actor, "template_applied_local", entry["id"], {"template": entry["template_id"], "changes": entry["changes"], "duplicate_reason": reason if matches else None})
