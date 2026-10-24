@@ -1,0 +1,44 @@
+[hidden] { display: none !important; }
+.live-banner { background: var(--surface-2); color: var(--muted); border-color: var(--border-soft); }
+.live-banner strong { color: var(--primary); }
+.live-banner button { border-color: var(--border); }
+.login-container { display: grid; place-items: center; margin: auto; width: 100%; padding: 24px; }
+.login { width: min(450px, 100%); display: grid; gap: 16px; padding: 28px; }
+.login h1, .login p { margin: 0; }
+.login-container > .login { flex-shrink: 0; }
+.sidebar-bottom { flex-wrap: wrap; }
+.sidebar-bottom button { padding: 4px 0; min-height: 24px; }
+.login-container[hidden] { display: none; }
+.login-container:not([hidden]) + .drawer { display: none; }
+.error-box { color: var(--err); background: var(--err-bg); border: 1px solid var(--err-border); padding: 12px; border-radius: 9px; }
+.content-scroll { overflow: auto; max-width: 100%; }
+.source-details { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-size: 12px; background: var(--surface-2); padding: 12px; border-radius: 8px; }
+.field textarea { width: 100%; }
+.check-list { max-height: 280px; overflow: auto; }
+.check-list label { display: flex; gap: 8px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--border-soft); font-size: 12px; }
+.file-input { width: 100%; }
+.section > .actions { margin-top: 16px; }
+.import-preview { max-height: 310px; }
+.tabs button { white-space: nowrap; }
+.registry-footer { background: var(--surface); }
+.drawer-footer { flex-wrap: wrap; }
+.drawer-body > .notice { margin-bottom: 18px; }
+.drawer-body label { margin-bottom: 14px; }
+.drawer-body .tabs { flex-wrap: nowrap; gap: 14px; }
+.history-event { padding: 12px 0; border-bottom: 1px solid var(--border-soft); }
+.history-event small { color: var(--muted); display: block; }
+.summary-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
+.dialog-head button { flex-shrink: 0; }
+dialog .dialog-body { overscroll-behavior: contain; }
+.import-preview table td { white-space: normal; max-width: 380px; }
+.import-preview select { max-width: 230px; }
+.workspace main > .notice { flex-shrink: 0; }
+.template-actions { margin-top: 15px; display: flex; gap: 8px; flex-wrap: wrap; }
+button[aria-busy=true] { cursor: progress; }
+@media(max-width:700px) {
+  .live-banner { height: 60px; }
+  .live-banner strong { font-size: 9px; }
+  .summary-grid { grid-template-columns: 1fr; }
+  .registry { min-height: 410px; }
+  .drawer-head h2 { font-size: 20px; }
+}
