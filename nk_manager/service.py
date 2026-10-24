@@ -26,6 +26,7 @@ def card_record(row):
 
 def candidates(pn, gtin, cards, exclude=None):
     normalize = lambda text: re.sub(r"[\s\-–—_]", "", text.casefold())
+    pn, gtin = str(pn or "").strip(), str(gtin or "").strip()
     key = normalize(pn)
     matches = []
     for card in cards:
@@ -34,7 +35,7 @@ def candidates(pn, gtin, cards, exclude=None):
         other = normalize(card["pn"])
         same_gtin = bool(gtin and card["gtin"] and gtin.zfill(14) == card["gtin"].zfill(14))
         similarity = SequenceMatcher(None, key, other).ratio() if key and other else 0
-        reason = ("Совпадает GTIN — проверьте идентификатор" if same_gtin else "Точный PN" if pn.casefold() == card["pn"].casefold() else "Совпадает PN после нормализации" if key == other else "Похожий PN" if similarity >= .86 else "")
+        reason = ("Совпадает GTIN — проверьте идентификатор" if same_gtin else "Точный PN" if key and other and pn.casefold() == card["pn"].casefold() else "Совпадает PN после нормализации" if key and other and key == other else "Похожий PN" if similarity >= .86 else "")
         if reason:
             matches.append({"id": card["id"], "pn": card["pn"], "gtin": card["gtin"], "name": card.get("name", ""), "external_status": card.get("external_status"), "reason": reason, "score": 2 if same_gtin else similarity})
     return sorted(matches, key=lambda c: -c["score"])[:10]
@@ -345,6 +346,7 @@ class Service:
         selected = set(ids)
         templates = self.store.all("SELECT * FROM templates WHERE status='active' ORDER BY created DESC")
         builtins = presets.installed(self.store)
+        busy = {r["card_id"] for r in self.store.all("SELECT card_id FROM nk_jobs WHERE state NOT IN ('confirmed','failed','cancelled')")} if self.store.one("SELECT 1 FROM sqlite_master WHERE name='nk_jobs'") else set()
         entries = []
         all_cards = self.cards()
         for card in all_cards:
@@ -358,6 +360,9 @@ class Service:
             if card["archived"] or card["owner"] not in ("", actor):
                 matching = []
                 message = "Остановлена или взята другим сотрудником"
+            if card["id"] in busy:
+                matching = []
+                message = "Дождитесь завершения операции НК"
             if matching:
                 body = json.loads(matching[0]["body"])
                 if matching[0]["id"] in builtins:
@@ -366,37 +371,46 @@ class Service:
                     if matching[0]["id"] not in builtins and rule["mode"] == "fill_if_empty" and rule["attribute"] in card["attributes"] and not card["attributes"][rule["attribute"]].strip():
                         changes[rule["attribute"]] = rule["value"]
                 message = "Заполнить только пустые поля" if changes else "Нет изменений"
-            entries.append({"id": card["id"], "pn": card["pn"], "revision": card["revision"], "changes": changes, "template_id": matching[0]["id"] if matching else None,
+            entries.append({"id": card["id"], "pn": card["pn"], "name":card["name"], "gtin":card["gtin"], "needs_input":(["PN"] if not card["pn"].strip() else [])+(["Наименование"] if not card["name"].strip() else []), "revision": card["revision"], "changes": changes, "template_id": matching[0]["id"] if matching else None,
                             "message": message, "duplicates": candidates(card["pn"], card["gtin"], all_cards, card["id"])})
         id = uid()
         with self.store.transaction() as db:
             db.execute("INSERT INTO plans VALUES(?,'template',?,?,?,0)", (id, actor, dumps(entries), now()))
         return {"id": id, "entries": entries}
 
-    def apply_template_plan(self, actor, id, reason):
+    def apply_template_plan(self, actor, id, reason, selected_ids=None):
         result = []
         builtins = presets.installed(self.store)
         with self.store.transaction() as db:
             plan = db.execute("SELECT * FROM plans WHERE id=? AND actor=?", (id, actor)).fetchone()
             if not plan or plan["applied"]:
                 raise Conflict("План отсутствует или уже применён")
-            for entry in json.loads(plan["body"]):
+            entries = json.loads(plan["body"])
+            if selected_ids is not None:
+                if not isinstance(selected_ids,list) or not selected_ids or len(selected_ids)>1000 or any(not isinstance(i,str) for i in selected_ids):
+                    raise ValueError("Выберите карточки для заполнения")
+                selected=set(selected_ids)
+                if not selected.issubset({e["id"] for e in entries}):
+                    raise ValueError("Выбор содержит карточки вне предпросмотра")
+                entries=[e for e in entries if e["id"] in selected]
+            for entry in entries:
+                identity={k:entry.get(k,"") for k in ("id","pn","name","gtin")}
                 card = db.execute("SELECT * FROM cards WHERE id=?", (entry["id"],)).fetchone()
                 active = db.execute("SELECT status FROM templates WHERE id=?", (entry["template_id"],)).fetchone()
                 if not entry["changes"]:
-                    result.append({"pn": entry["pn"], "status": "skipped", "message": entry["message"]})
+                    result.append({**identity, "status": "skipped", "message": entry["message"]})
                     continue
                 if not card or card["revision"] != entry["revision"] or card["archived"] or card["owner"] not in ("", actor) or not active or active["status"] != "active":
-                    result.append({"pn": entry["pn"], "status": "conflict", "message": "Ревизия, ответственность или шаблон изменились"})
+                    result.append({**identity, "status": "conflict", "message": "Ревизия, ответственность или шаблон изменились"})
                     continue
                 # Recheck against the current catalogue, not just the preview.
                 matches = candidates(card["pn"], card["gtin"], [dict(c) for c in db.execute("SELECT * FROM cards")], card["id"])
                 if matches and not reason.strip():
-                    result.append({"pn": entry["pn"], "status": "warning", "message": "Нужно подтверждение совпадений"})
+                    result.append({**identity, "status": "warning", "message": "Нужно подтверждение совпадений"})
                     continue
                 attrs = json.loads(card["attributes"])
                 if db.execute("SELECT 1 FROM sqlite_master WHERE name='nk_jobs'").fetchone() and db.execute("SELECT 1 FROM nk_jobs WHERE card_id=? AND state NOT IN ('confirmed','failed','cancelled')",(card["id"],)).fetchone():
-                    result.append({"pn":entry["pn"],"status":"conflict","message":"Выполняется операция НК"})
+                    result.append({**identity,"status":"conflict","message":"Выполняется операция НК"})
                     continue
                 for key, value in entry["changes"].items():
                     can_add = entry["template_id"] in builtins and presets.attribute_id(key) in presets.AUTO_IDS
@@ -404,6 +418,6 @@ class Service:
                         attrs[key] = value
                 db.execute("UPDATE cards SET attributes=?,dirty=1,owner=?,revision=revision+1,updated=? WHERE id=?", (dumps(attrs), actor, now(), entry["id"]))
                 audit(db, actor, "template_applied_local", entry["id"], {"template": entry["template_id"], "changes": entry["changes"], "duplicate_reason": reason if matches else None})
-                result.append({"pn": entry["pn"], "status": "updated", "message": "Сохранено локально"})
+                result.append({**identity, "status": "updated", "message": "Сохранено локально"})
             db.execute("UPDATE plans SET applied=1 WHERE id=?", (id,))
         return result

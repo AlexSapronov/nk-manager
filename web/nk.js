@@ -32,7 +32,7 @@ window.NkUI = (() => {
    const units=Array.isArray(a?.attr_value_type)?a.attr_value_type.filter(v=>typeof v==='string'):[];const unit=c.attributes[key+'::unit']||'';
    if(units.length)control+=`<select aria-label="Единица измерения ${esc(key)}" data-attribute="${esc(key+'::unit')}" ${disabled?'disabled':''}><option value="">Единица измерения</option>${[...new Set([...units,...(unit?[unit]:[])])].map(v=>`<option ${v===unit?'selected':''}>${esc(v)}</option>`).join('')}</select>`;
    else if(unit)control+=`<small>Единица: ${esc(unit)}</small>`;
-   return `<label class="field">${esc(a?.attr_name||key)} ${a?.attr_type==='m'?' · обязательно':''}${control}${a?.attr_field_type?`<small>Тип НК: ${esc(a.attr_field_type)}</small>`:''}</label>`;
+   return `<label class="field">${esc(a?.attr_name||key.replace(/\s*\[#\d+\]/g,''))} ${a?.attr_type==='m'?' · обязательно':''}${control}${a?.attr_field_type?`<small>Тип НК: ${esc(a.attr_field_type)}</small>`:''}</label>`;
   }).join('')+(canEdit?'<button id="add-attribute">Добавить локальное поле</button>':'');
  }
  function bindCard(c){

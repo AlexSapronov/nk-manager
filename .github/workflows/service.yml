@@ -22,6 +22,9 @@ jobs:
       - run: node tests/nk-browser.cjs
         env:
           NK_TEST_PYTHON: python
+      - run: node tests/template-browser.cjs
+        env:
+          NK_TEST_PYTHON: python
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -29,5 +32,7 @@ jobs:
           path: |
             docs/live-browser-report.json
             docs/nk-browser-report.json
+            docs/template-browser-report.json
+            docs/screenshots/template-*.png
             docs/screenshots/nk-*.png
             docs/screenshots/live-*.png

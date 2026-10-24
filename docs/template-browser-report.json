@@ -1,0 +1,12 @@
+{
+  "scope": "Real local HTTP and SQLite with 92 synthetic NK snapshots; no upstream calls",
+  "checks": [
+    "90 empty-PN drafts: no false matches, names/GTIN visible, 89 checked cards saved, one left untouched, responsive dark dialog",
+    "Next step opens the actual incomplete card and allows entering PN",
+    "Concurrent revision change is explained with zero saved; retry rebuilds preview and succeeds",
+    "Real duplicate GTIN is still blocked until reason is entered; unchecked card is excluded",
+    "No-change selection explains next action and cannot submit an empty operation"
+  ],
+  "errors": [],
+  "status": "passed"
+}
