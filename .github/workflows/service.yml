@@ -1,4 +1,4 @@
-name: Local service checks
+name: Service and NK contract checks
 on: [push, pull_request]
 jobs:
   service:
@@ -13,10 +13,13 @@ jobs:
           node-version: '22'
           cache: npm
       - run: python -m pip install -r requirements-dev.txt
-      - run: python -m pytest tests/test_service.py -q
+      - run: python -m pytest tests/test_service.py tests/test_nk.py -q
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: node tests/live-browser.cjs
+        env:
+          NK_TEST_PYTHON: python
+      - run: node tests/nk-browser.cjs
         env:
           NK_TEST_PYTHON: python
       - uses: actions/upload-artifact@v4
@@ -25,4 +28,6 @@ jobs:
           name: local-service-browser-evidence
           path: |
             docs/live-browser-report.json
+            docs/nk-browser-report.json
+            docs/screenshots/nk-*.png
             docs/screenshots/live-*.png

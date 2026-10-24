@@ -2,19 +2,19 @@
 
 Рабочее место для локальной подготовки карточек российского Национального каталога «Честного знака».
 
-**Версия 0.2.0: реальный локальный сервис с SQLite, входом, XLSX, редактированием, шаблонами и выгрузкой для анализа.** База при установке пустая. Данные сохраняются после перезапуска. Деморежима и фиктивных ответов НК в сервисе нет.
+**Версия 0.3.0:** постоянная SQLite, прямое API российского НК, синхронизация, схемы атрибутов, создание/обновление, отдельное выделение GTIN, модерация и публикация через Windows/CryptoPro. Подписант перенесён из marking-bm. Внешние действия подтверждаются отдельно и проверяются повторным чтением; неопределённый результат не повторяется автоматически.
 
-Прямое API НК, актуальная атрибутная схема, получение GTIN, модерация, Windows-подпись и публикация **пока не подключены**. Полный промышленный цикл не заявляется: локальное сохранение не меняет данные в НК.
+[Обновление вашей WSL2-установки и подключение подписи](docs/NK-LIVE.md). Реальный ключ организации и аппаратная УКЭП в нашей среде отсутствуют: промышленный пилот предстоит выполнить у владельца. Создание/редактирование комплектов и наборов пока заблокировано.
 
 ## Запуск в WSL2
 
 Из домашнего каталога Ubuntu/WSL2, Python 3.12:
 
 ```bash
-git clone --branch codex/wsl-workspace https://github.com/AlexSapronov/nk-manager.git
+sudo apt update && sudo apt install -y python3.12-venv
+git clone --branch codex/nk-live https://github.com/AlexSapronov/nk-manager.git
 cd nk-manager
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements-lock.txt
+python3 -m venv .venv && .venv/bin/python -m pip install -r requirements-lock.txt
 .venv/bin/python scripts/setup.py
 .venv/bin/python scripts/run_wsl.py
 ```
@@ -51,16 +51,18 @@ python3 -m venv .venv
 
 ```bash
 .venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m pytest tests/test_service.py -q
+.venv/bin/python -m pytest tests/test_service.py tests/test_nk.py -q
 npm ci
 npx playwright install chromium
 node tests/live-browser.cjs
+node tests/nk-browser.cjs
 ```
 
 Тесты используют отдельную временную базу и входной XLSX; рабочие данные не затрагиваются. Browser smoke запускает настоящий HTTP-сервис, входит, создаёт/импортирует/редактирует записи, скачивает архив, утверждает и применяет шаблон. [Отчёт](docs/live-browser-report.json). Полный API/УКЭП/Windows/WSL2-пилот этими тестами не заменяется.
 
 ## Документация
 
+- [Прямой API НК и подпись в Windows](docs/NK-LIVE.md)
 - [WSL2: установка, кнопки, экспорт, backup и обновление](docs/WSL.md)
 - [Ограничения и результат рабочего выпуска](docs/LOCAL-RELEASE.md)
 - [Формат локальных предложений шаблонов](docs/TEMPLATES.md)

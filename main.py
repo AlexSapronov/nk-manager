@@ -1,5 +1,9 @@
-"""WSL/local persistent workspace. External NK writes are unavailable by design."""
+"""WSL/local persistent workspace. Durable NK API operations and Windows signing broker."""
 import hashlib
+from contextlib import asynccontextmanager
+from starlette.concurrency import run_in_threadpool
+from datetime import datetime, timedelta, timezone
+import re
 import json
 import os
 from pathlib import Path
@@ -15,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from nk_manager import __version__
 from nk_manager.service import Conflict, Service, candidates
 from nk_manager.store import Store, audit, now, uid, verify_password
+from nk_manager.nk import Engine
 
 ROOT = Path(__file__).resolve().parent
 
@@ -22,9 +27,22 @@ ROOT = Path(__file__).resolve().parent
 def create_app(data_directory=None):
     store = Store(data_directory or os.environ.get("NK_DATA", ROOT / "data"))
     service = Service(store)
-    app = FastAPI(title="Менеджер НК", docs_url=None, redoc_url=None, openapi_url=None)
+    nk = Engine(store)
+    @asynccontextmanager
+    async def lifespan(app):
+        nk.start()
+        try:
+            yield
+        finally:
+            nk.stop.set()
+            if nk.thread:
+                await run_in_threadpool(nk.thread.join,50)
+
+    app = FastAPI(title="Менеджер НК", docs_url=None, redoc_url=None, openapi_url=None,lifespan=lifespan)
     app.state.store = store
     app.state.service = service
+    app.state.nk = nk
+
     stamp = now()
     try:
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL).strip()
@@ -51,7 +69,7 @@ def create_app(data_directory=None):
             return JSONResponse({"detail": "Недопустимый Host"}, status_code=400)
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("origin")
-            if origin not in origins:
+            if not request.url.path.startswith("/api/signer/") and origin not in origins:
                 return JSONResponse({"detail": "Проверка Origin не пройдена"}, status_code=403)
             if not request.headers.get("content-length", "").isdigit():
                 return JSONResponse({"detail": "Требуется Content-Length"}, status_code=411)
@@ -84,8 +102,8 @@ def create_app(data_directory=None):
 
     @app.get("/health")
     def health():
-        return {"status": "ok", "version": __version__, "commit": commit, "assets": asset_version, "schema": 1, "started": stamp,
-                "setup_required": not bool(store.one("SELECT 1 FROM settings WHERE key='admin_hash'")), "nk_api_connected": False, "external_writes": False}
+        return {"status": "ok", "version": __version__, "commit": commit, "assets": asset_version, "schema": int(store.one("SELECT value FROM settings WHERE key='schema_version'")["value"]), "started": stamp,
+                "setup_required": not bool(store.one("SELECT 1 FROM settings WHERE key='admin_hash'")), "nk_api_configured": nk.status()["configured"], "external_writes": nk.status()["writes_enabled"]}
 
     @app.get("/")
     def index():
@@ -244,9 +262,125 @@ def create_app(data_directory=None):
     def events(user=Depends(admin)):
         return store.all("SELECT actor,action,entity,detail,created FROM audit ORDER BY id DESC LIMIT 500")
 
+    @app.get("/api/nk/status")
+    def nk_status(user=Depends(session)):
+        return nk.status()
+
+    @app.post("/api/admin/nk/config")
+    def nk_config(data: dict, user=Depends(admin)):
+        nk.save_config(user["username"],data)
+        return nk.status()
+
+    @app.post("/api/admin/nk/test")
+    def nk_test(user=Depends(admin)):
+        result = nk.client.call("GET", "/v4/product-list", {"limit":1,"offset":0,"from_date":(datetime.now(timezone.utc)-timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S"),"to_date":datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")})
+        return {"ok":True,"total":result.get("total"),"returned":len(result.get("goods",[]))}
+
+    @app.post("/api/admin/nk/signer-token")
+    def nk_signer_token(user=Depends(admin)):
+        with store.transaction() as db:
+            audit(db,user["username"],"signer_token_viewed","nk",{})
+        return {"token":nk.config().get("signer_token","")}
+
+    @app.post("/api/nk/sync")
+    def nk_sync(user=Depends(session)):
+        return {"id":nk.sync(user["username"])}
+
+    @app.get("/api/nk/categories")
+    def nk_categories(tnved: str, user=Depends(session)):
+        if not re.fullmatch(r"\d{4,10}",tnved):
+            raise ValueError("Введите ТН ВЭД от 4 до 10 цифр")
+        return nk.client.call("GET","/v3/categories",{"tnved":tnved})
+
+    @app.get("/api/nk/schema/{cat_id}")
+    def nk_schema(cat_id: int, user=Depends(session)):
+        return nk.schema(cat_id)
+
+    @app.post("/api/nk/prepare/{kind}")
+    def nk_prepare(kind: str, data: dict, user=Depends(session)):
+        if data.get("confirmed") is not True:
+            raise ValueError("Нужно явное подтверждение внешнего действия")
+        return {"id":nk.prepare(user["username"],kind,str(data.get("id","")),data.get("revision"),data.get("options") or {},bool(user["admin"]))}
+
+    @app.get("/api/nk/job/{id}")
+    def nk_job(id: str, user=Depends(session)):
+        job=store.one("SELECT id,kind,card_id,state,result,error,external_id,created,updated FROM nk_jobs WHERE id=?",(id,))
+        if not job:
+            raise HTTPException(404,"Операция не найдена")
+        if job["kind"]=="publish" and job["state"] in ("signing","signed"):
+            job["result"] = "Подготовлен неизменяемый XML, ожидается подпись/отправка"
+        return job
+
+    @app.post("/api/nk/job/{id}/check")
+    def nk_check(id: str, user=Depends(admin)):
+        return nk.reconcile(user["username"],id)
+
+    @app.get("/api/nk/card/{id}")
+    def nk_card(id: str,user=Depends(session)):
+        saved=store.one("SELECT * FROM nk_cards WHERE card_id=?",(id,))
+        scope=store.one("SELECT cat_id FROM nk_scopes WHERE card_id=?",(id,))
+        raw=json.loads(saved["raw"]) if saved else None
+        cat_id=scope["cat_id"] if scope else str(raw["categories"][0]["cat_id"]) if raw and raw.get("categories") else None
+        schema=store.one("SELECT body FROM nk_schemas WHERE cat_id=?",(cat_id,)) if cat_id else None
+        return {"raw":raw,"confirmed":saved["confirmed"] if saved else None,"cat_id":cat_id,"schema":json.loads(schema["body"]) if schema else []}
+
+    @app.post("/api/nk/card/{id}/category")
+    def nk_card_category(id: str,data: dict,user=Depends(session)):
+        card=service.get(id)
+        if card["revision"]!=data.get("revision") or card["owner"] not in ("",user["username"]) and not user["admin"]:
+            raise Conflict("Ревизия/ответственность изменились")
+        cat_id=str(data.get("cat_id",""))
+        if not cat_id.isdigit() or not store.one("SELECT cat_id FROM nk_schemas WHERE cat_id=?",(cat_id,)):
+            raise ValueError("Сначала загрузите реальную схему выбранной категории")
+        with store.transaction() as db:
+            db.execute("INSERT OR REPLACE INTO nk_scopes VALUES(?,?)",(id,cat_id))
+            audit(db,user["username"],"nk_category_selected",id,{"cat_id":cat_id})
+        return {"ok":True}
+
+    @app.post("/api/nk/card/{id}/refresh")
+    def nk_card_refresh(id: str,data: dict,user=Depends(session)):
+        if data.get("confirmed") is not True:
+            raise ValueError("Подтвердите замену локальных полей актуальными данными НК")
+        with nk.lock:
+            card=service.get(id)
+            if card["revision"]!=data.get("revision") or card["owner"] not in ("",user["username"]) and not user["admin"]:
+                raise Conflict("Ревизия или ответственный изменились")
+            if store.one("SELECT id FROM nk_jobs WHERE card_id=? AND state NOT IN ('failed','confirmed','cancelled')",(id,)):
+                raise Conflict("Сначала завершите или сверьте операцию НК")
+            saved=store.one("SELECT good_id FROM nk_cards WHERE card_id=?",(id,))
+            if not saved:
+                raise ValueError("Карточка пока не связана с API НК")
+            raw=nk.client.details(saved["good_id"])
+            with store.transaction() as db:
+                audit(db,user["username"],"nk_local_copy_replaced",id,{"previous_local":card})
+            nk.apply_remote(raw,user["username"],id,force=True)
+        return service.get(id)
+
+    def signer(request: Request):
+        supplied=request.headers.get("authorization","").removeprefix("Bearer ")
+        if not nk.signer_auth(supplied):
+            raise HTTPException(403,"Подписант не авторизован")
+
+    @app.post("/api/signer/heartbeat",dependencies=[Depends(signer)])
+    def heartbeat(data: dict):
+        if data.get("thumbprint")!=nk.config().get("thumbprint"):
+            raise ValueError("Другой сертификат")
+        with store.transaction() as db:
+            db.execute("INSERT OR REPLACE INTO settings VALUES('nk_signer_heartbeat',?)",(dumps({"thumbprint":data.get("thumbprint"),"expires":data.get("expires"),"status":str(data.get("status",""))[:200],"time":now()}),))
+        return {"ok":True}
+
+    @app.post("/api/signer/next",dependencies=[Depends(signer)])
+    def signer_next():
+        return nk.signer_next(nk.config().get("thumbprint",""))
+
+    @app.post("/api/signer/result",dependencies=[Depends(signer)])
+    def signer_result(data: dict):
+        nk.signer_result(data)
+        return {"ok":True}
+
     @app.post("/api/nk/{action}")
-    def unavailable(action: str, user=Depends(session)):
-        raise HTTPException(503, "Интеграция НК не подключена: нет подтверждённого API-контракта. Ни один запрос в НК не отправлен")
+    def legacy_nk_action(action: str,user=Depends(session)):
+        raise HTTPException(503,"Используйте подготовку и подтверждение операции в интерфейсе карточки НК")
 
     app.mount("/assets", StaticFiles(directory=ROOT / "web"), name="assets")
     return app

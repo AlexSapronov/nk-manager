@@ -8,3 +8,5 @@ backups/
 *.sqlite3*
 tests/.runtime/
 test-results/
+
+nk-secrets.json

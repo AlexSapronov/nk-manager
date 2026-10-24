@@ -1,0 +1,10 @@
+{
+  "scope": "Synthetic NK transport and software CMS in isolated test server; no productive NK or Windows hardware",
+  "checks": [
+    "Admin config, read-only API check and own-catalog sync via real application endpoints",
+    "Local edit then confirmed NK feed, moderation and exact XML preparation from card UI",
+    "Signer lease/hash/certificate protocol, software detached CMS and read-back publication confirmation"
+  ],
+  "errors": [],
+  "status": "passed"
+}

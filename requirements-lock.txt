@@ -16,3 +16,9 @@ starlette==1.10.0
 typing-inspection==0.4.4
 typing_extensions==4.16.0
 uvicorn==0.54.0
+certifi==2026.10.23
+httpcore==1.0.9
+httpx==0.28.1
+cryptography==46.0.5
+cffi==2.1.1
+pycparser==3.12

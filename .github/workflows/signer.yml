@@ -1,0 +1,19 @@
+name: Windows signer syntax
+on: [push, pull_request]
+jobs:
+  powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse signer with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          $path = Join-Path $env:GITHUB_WORKSPACE 'signer\Start-Signer.ps1'
+          $null = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors)
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Host 'PowerShell syntax OK. Hardware CryptoPro/Rutoken is not tested by this job.'

@@ -28,7 +28,7 @@ def main():
     os.environ["NK_DATA"] = directory
     os.environ["NK_PUBLIC_URL"] = f"http://localhost:{args.port}"
     print(f"Откройте в Windows: http://localhost:{args.port}", flush=True)
-    print("Реальные локальные данные. Прямое API НК не подключено. Остановка: Ctrl+C.", flush=True)
+    print("Постоянная БД. API НК настраивается в админке; Windows-подписант запускается отдельно. Остановка: Ctrl+C.", flush=True)
     os.chdir(ROOT)
     import uvicorn
     uvicorn.run("main:create_app", factory=True, host="127.0.0.1", port=args.port, workers=1, access_log=False)

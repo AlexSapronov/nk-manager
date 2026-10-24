@@ -77,6 +77,9 @@ class Service:
             if id and not old:
                 raise ValueError("Карточка не найдена")
             if old:
+                active = db.execute("SELECT id FROM nk_jobs WHERE card_id=? AND state NOT IN ('confirmed','failed','cancelled')", (id,)).fetchone() if db.execute("SELECT 1 FROM sqlite_master WHERE name='nk_jobs'").fetchone() else None
+                if active:
+                    raise Conflict("Выполняется операция НК. Сначала дождитесь результата или выполните сверку")
                 if old["revision"] != data.get("revision"):
                     raise Conflict("Карточка изменена в другой вкладке. Обновите данные; ваш ввод не отправлен")
                 if old["archived"]:
@@ -100,6 +103,8 @@ class Service:
 
     def claim(self, actor, id, revision, admin=False, release=False):
         with self.store.transaction() as db:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='nk_jobs'").fetchone() and db.execute("SELECT 1 FROM nk_jobs WHERE card_id=? AND state NOT IN ('confirmed','failed','cancelled')",(id,)).fetchone():
+                raise Conflict("Карточка участвует в операции НК; ответственность временно закреплена")
             old = db.execute("SELECT * FROM cards WHERE id=?", (id,)).fetchone()
             if not old or old["revision"] != revision:
                 raise Conflict("Ревизия изменилась; обновите карточку")
@@ -119,6 +124,8 @@ class Service:
             if old["owner"] not in (actor, "") and not admin:
                 raise Conflict("Карточка в работе у другого сотрудника")
             db.execute("UPDATE cards SET archived=?,revision=revision+1,updated=? WHERE id=?", (0 if restore else 1, now(), id))
+            if not restore and db.execute("SELECT 1 FROM sqlite_master WHERE name='nk_jobs'").fetchone():
+                db.execute("UPDATE nk_jobs SET state='cancelled',error='Остановлено до внешней отправки' WHERE card_id=? AND state IN ('prepared','signing','signed')",(id,))
             audit(db, actor, "restored_local" if restore else "stopped_local", id, {"reason": reason, "external_unchanged": True})
         return self.get(id)
 
@@ -196,6 +203,9 @@ class Service:
                     results.append({"row": number, "status": "error", "message": str(exc)})
                     continue
                 current = db.execute("SELECT * FROM cards WHERE id=?", (row["target"],)).fetchone() if row["target"] else None
+                if current and db.execute("SELECT 1 FROM sqlite_master WHERE name='nk_jobs'").fetchone() and db.execute("SELECT 1 FROM nk_jobs WHERE card_id=? AND state NOT IN ('confirmed','failed','cancelled')",(current["id"],)).fetchone():
+                    results.append({"row":number,"status":"conflict","message":"Выполняется операция НК"})
+                    continue
                 if row["target"] and (not current or current["revision"] != row["target_revision"] or current["dirty"]):
                     results.append({"row": number, "status": "conflict", "message": "Карточка изменилась после предпросмотра"})
                     continue
@@ -378,6 +388,9 @@ class Service:
                     result.append({"pn": entry["pn"], "status": "warning", "message": "Нужно подтверждение совпадений"})
                     continue
                 attrs = json.loads(card["attributes"])
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name='nk_jobs'").fetchone() and db.execute("SELECT 1 FROM nk_jobs WHERE card_id=? AND state NOT IN ('confirmed','failed','cancelled')",(card["id"],)).fetchone():
+                    result.append({"pn":entry["pn"],"status":"conflict","message":"Выполняется операция НК"})
+                    continue
                 for key, value in entry["changes"].items():
                     if key in attrs and not attrs[key].strip():
                         attrs[key] = value
