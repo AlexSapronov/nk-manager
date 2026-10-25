@@ -356,3 +356,57 @@ def test_old_sync_still_blocks_remote_change_before_dispatch(env):
     assert job["state"] == "failed" and "изменилась" in job["error"]
     assert any(r[1]=="/v3/feed-product" for r in remote.requests)
     assert not any(r[1]=="/v3/feed-moderation" for r in remote.requests)
+
+
+def test_existing_card_uses_its_other_category_if_first_schema_is_missing(env):
+    store,service,engine,remote,*_=env
+    remote.raw['categories']=[{'cat_id':551141,'cat_name':'8536490000 Прочие реле'}, {'cat_id':231081,'cat_name':'Реле времени, защиты, функциональные'}]
+    id=engine.apply_remote(remote.raw)
+    c=service.get(id);c['attributes']['Страна [#1]']='FR'
+    c=service.save('tester',c,id,admin=True)
+    original=remote.handle
+    schemas=[]
+    def handle(request):
+        if request.url.path=='/v3/attributes':
+            schemas.append(request.url.params['cat_id'])
+            if request.url.params['cat_id']=='551141':
+                return httpx.Response(404,json={'error':'not found'})
+        return original(request)
+    engine.client.transport=httpx.MockTransport(handle)
+    job=engine.prepare('tester','save',id,c['revision'])
+    payload=json.loads(store.one('SELECT payload FROM nk_jobs WHERE id=?',(job,))['payload'])
+    assert schemas==['551141','231081']
+    assert payload['entry']['good_id']==111
+    assert 'categories' not in payload['entry']
+    tick(engine);tick(engine)
+    assert store.one('SELECT state FROM nk_jobs WHERE id=?',(job,))['state']=='confirmed'
+    assert service.get(id)['category']=='8536490000 Прочие реле'
+    assert sum(r[1]=='/v3/feed' for r in remote.requests)==1
+
+
+@pytest.mark.parametrize('code',[401,403,429,500])
+def test_card_schema_does_not_mask_auth_rate_or_server_errors(env,code):
+    store,service,engine,remote,*_=env
+    seen=[]
+    def handle(request):
+        seen.append(str(request.url.params['cat_id']))
+        return httpx.Response(code,json={'error':'test-key-secret'})
+    engine.client.transport=httpx.MockTransport(handle)
+    with pytest.raises(RemoteError) as caught:
+        engine.card_schema([{'cat_id':551141},{'cat_id':231081}])
+    assert caught.value.code==code
+    assert seen==['551141']
+    assert '/v3/attributes' in str(caught.value)
+    assert '551141' in str(caught.value)
+    assert 'test-key-secret' not in str(caught.value)
+    assert 'apikey' not in str(caught.value)
+
+
+def test_missing_all_card_schemas_reports_categories_without_enqueuing(env):
+    store,service,engine,remote,*_=env
+    c=current(service);c['attributes']['Страна [#1]']='FR';c=service.save('tester',c,c['id'],admin=True)
+    engine.client.transport=httpx.MockTransport(lambda request: httpx.Response(404))
+    with pytest.raises(RemoteError,match='123'):
+        engine.prepare('tester','save',c['id'],c['revision'])
+    assert not store.one("SELECT id FROM nk_jobs WHERE kind='save'")
+    assert service.get(c['id'])['dirty']

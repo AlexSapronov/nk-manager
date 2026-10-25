@@ -72,7 +72,12 @@ class Client:
                 retry = 60
             if response.status_code==429:
                 self.retry_until=time.time()+retry
-            raise RemoteError(f"НК вернул HTTP {response.status_code}. Проверьте доступ и статус операции", response.status_code, retry)
+            # Describe the endpoint, never the URL: it contains the API key.
+            context = {"/v3/attributes": "получение полей категории", "/v3/feed-product": "чтение карточки", "/v3/feed": "сохранение карточки", "/v3/feed-moderation": "отправка на модерацию"}.get(path, "запрос к НК")
+            category = str((params or {}).get("cat_id", ""))
+            if path == "/v3/attributes" and category.isdigit():
+                context += " " + category
+            raise RemoteError(f"НК вернул HTTP {response.status_code}: {context} ({method} {path}). Проверьте доступ и статус операции", response.status_code, retry)
         try:
             result = response.json()
         except ValueError:
@@ -261,6 +266,30 @@ class Engine:
             db.execute("INSERT OR REPLACE INTO nk_schemas VALUES(?,?,?)", (str(cat_id), dumps(body), now()))
         return body
 
+    def card_schema(self, categories):
+        """Try only categories actually returned by NK for this card.
+
+        Imported cards may list a classification category before their product
+        category. A 404 for its schema must not prevent editing the same good_id.
+        No category is replaced in the card or in the outgoing update.
+        """
+        tried = set()
+        last_error = None
+        for category in categories:
+            cat_id = str(category["cat_id"])
+            if cat_id in tried:
+                continue
+            tried.add(cat_id)
+            try:
+                return self.schema(cat_id)
+            except RemoteError as error:
+                if error.code != 404:
+                    raise
+                last_error = error
+        if last_error:
+            raise RemoteError("НК не вернул схему ни для одной категории карточки (" + ", ".join(sorted(tried)) + "). Отправка не выполнена. Обновите каталог; если ошибка повторится, проверьте категории в НК", 404) from None
+        raise ValueError("У карточки отсутствует подтверждённая категория")
+
     def prepare(self, actor, kind, card_id, revision, options=None, admin=False):
         options = options or {}
         if kind not in ("save", "moderate", "publish", "gtin"):
@@ -371,7 +400,7 @@ class Engine:
                     entry["good_attrs"].append(attr)
             if not cat_id:
                 raise ValueError("У карточки отсутствует подтверждённая категория")
-            schema = self.schema(cat_id)
+            schema = self.card_schema(categories) if raw else self.schema(cat_id)
             allowed = {str(a["attr_id"]):a for a in schema}
             for attr in entry["good_attrs"]:
                 definition = allowed.get(str(attr["attr_id"]))
