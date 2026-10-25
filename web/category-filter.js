@@ -31,7 +31,8 @@ window.CategoryFilter = (() => {
   }
   trigger.onclick=()=>{if(panel.matches(':popover-open')){close();return;}search.value='';render();panel.showPopover();position();search.focus();};
   trigger.onkeydown=e=>{if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();if(!panel.matches(':popover-open'))trigger.click();focusOption(e.key==='ArrowDown'?0:visible.length-1);}};
-  panel.addEventListener('toggle',()=>trigger.setAttribute('aria-expanded',String(panel.matches(':popover-open'))));
+  // beforetoggle runs synchronously, unlike the queued/coalesced toggle event.
+  panel.addEventListener('beforetoggle',event=>trigger.setAttribute('aria-expanded',String(event.newState==='open')));
   search.oninput=render;
   panel.onkeydown=e=>{
    if(e.key==='Escape'){e.preventDefault();close(true);}
