@@ -1,0 +1,8 @@
+{
+  "scope": "Synthetic NK and mixed drafts, real HTTP/SQLite workflow",
+  "checks": [
+    "Four stages; published PN hidden with exact/case-sensitive toggle; local preparation and free editing without reasons; one confirmation saves then moderates; signing stage reached; responsive layout"
+  ],
+  "errors": [],
+  "status": "passed"
+}

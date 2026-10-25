@@ -99,3 +99,22 @@ dialog.template-dialog { max-width: 1120px; width: calc(100% - 32px); }
 #category-filter-options button[aria-selected="true"] { color: var(--primary); font-weight: 700; }
 #category-filter-status { color: var(--muted); }
 @media (max-width: 600px) { .category-filter-host { flex: 1 1 170px; } }
+
+.draft-stages { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; margin: 20px 0; }
+.draft-stages button { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; font: inherit; background: var(--surface); color: var(--text); padding: 16px; }
+.draft-stages button.active { border-color: var(--primary); box-shadow: inset 0 -3px var(--primary); }
+.draft-stages b { font-size: 22px; }
+.draft-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.draft-toolbar p { margin: 0; max-width: 65ch; }
+.draft-toolbar button { flex-shrink: 0; }
+.draft-hidden-toggle { display: flex; align-items: center; gap: 8px; padding: 8px 16px; color: var(--muted); font-size: 13px; }
+.draft-table td { white-space: normal; overflow-wrap: anywhere; }
+.draft-table td small { display: block; margin-top: 5px; }
+@media(max-width:900px) { .draft-stages { grid-template-columns: repeat(2,minmax(0,1fr)); } .draft-toolbar { align-items: stretch; flex-direction: column; } }
+
+.draft-check-col { width: 44px; }
+.draft-product-col { width: 30%; }
+.draft-action-col { width: 180px; }
+.draft-table td:last-child { min-width: 150px; }
+.draft-table td:last-child button { white-space: nowrap; overflow-wrap: normal; font: inherit; font-size: 13px; }
+.draft-toolbar button { font: inherit; font-size: 14px; }

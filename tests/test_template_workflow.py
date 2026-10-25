@@ -52,15 +52,14 @@ def test_only_checked_cards_are_applied_and_unplanned_ids_are_rejected(tmp_path)
     assert svc.get(ids[1])['dirty']==1
 
 
-def test_real_gtin_duplicate_still_requires_confirmation_and_can_retry(tmp_path):
+def test_local_template_records_duplicates_without_blocking(tmp_path):
     store,svc,ids=drafts(tmp_path,2)
     with store.transaction() as db:db.execute('UPDATE cards SET gtin=(SELECT gtin FROM cards WHERE id=?) WHERE id=?',(ids[0],ids[1]))
     plan=svc.template_plan('tester',ids[:1])
     assert len(plan['entries'][0]['duplicates'])==1
     result=svc.apply_template_plan('tester',plan['id'],'',ids[:1])
-    assert result[0]['status']=='warning' and result[0]['id']==ids[0]
-    retry=svc.template_plan('tester',ids[:1])
-    assert svc.apply_template_plan('tester',retry['id'],'Проверены исполнения',ids[:1])[0]['status']=='updated'
+    assert result[0]['status']=='updated' and result[0]['id']==ids[0]
+    assert not svc.template_plan('tester',ids[:1])['entries'][0]['changes']
 
 
 def test_unfinished_operation_is_explained_before_confirmation(tmp_path):

@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS nk_receipts(id INTEGER PRIMARY KEY,job_id TEXT NOT NU
 CREATE TABLE IF NOT EXISTS nk_jobs(id TEXT PRIMARY KEY,kind TEXT NOT NULL,card_id TEXT,revision INTEGER,actor TEXT NOT NULL,
  op_key TEXT NOT NULL UNIQUE,payload TEXT NOT NULL,sha256 TEXT NOT NULL,state TEXT NOT NULL,result TEXT,error TEXT,
  external_id TEXT,lease TEXT,lease_until REAL,signature TEXT,next_at REAL NOT NULL DEFAULT 0,created TEXT NOT NULL,updated TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS nk_draft_followups(save_job TEXT PRIMARY KEY REFERENCES nk_jobs(id),card_id TEXT NOT NULL,actor TEXT NOT NULL,moderate_job TEXT,state TEXT NOT NULL,error TEXT);
 CREATE TRIGGER IF NOT EXISTS nk_payload_immutable BEFORE UPDATE OF payload,sha256,kind,card_id,revision,actor ON nk_jobs BEGIN SELECT RAISE(ABORT,'immutable NK command'); END;
 CREATE TRIGGER IF NOT EXISTS nk_receipts_no_update BEFORE UPDATE ON nk_receipts BEGIN SELECT RAISE(ABORT,'immutable receipt'); END;
 CREATE TRIGGER IF NOT EXISTS nk_receipts_no_delete BEFORE DELETE ON nk_receipts BEGIN SELECT RAISE(ABORT,'immutable receipt'); END;
@@ -284,7 +285,7 @@ class Engine:
                 return current_jobs["id"]
             all_cards = self.store.all("SELECT id,pn,gtin,name,external_status FROM cards")
             matches = candidates(card["pn"], card["gtin"], all_cards, card_id)
-            if matches and not str(options.get("duplicate_reason", "")).strip():
+            if kind in ("save","gtin") and not self.store.one("SELECT card_id FROM nk_cards WHERE card_id=?",(card_id,)) and matches and not str(options.get("duplicate_reason", "")).strip():
                 raise Conflict("Найдены совпадения PN/GTIN. Просмотрите их и укажите причину продолжения")
             known = self.store.one("SELECT * FROM nk_cards WHERE card_id=?", (card_id,))
             raw = json.loads(known["raw"]) if known else None
@@ -467,6 +468,9 @@ class Engine:
                 except (ValueError, KeyError, TypeError) as error:
                     current = self.store.one("SELECT state FROM nk_jobs WHERE id=?", (job["id"],))
                     self.state(job["id"], "unknown" if current["state"]=="dispatching" else "failed", error="Операция остановлена: "+str(error)[:1000])
+
+            from .draft_workflow import advance
+            advance(self)
 
     def sync_tick(self, job):
         payload = json.loads(job["payload"])

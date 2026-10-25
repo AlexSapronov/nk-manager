@@ -22,14 +22,14 @@ window.TemplateFlow = (() => {
    `<button data-close>Отмена</button>${plan.entries.length&&(missing.length||!ready.length)?'<button id="plan-open-first">Открыть карточку</button>':''}<button id="apply-plan" class="primary" ${ready.length?'':'disabled'}>Заполнить выбранные (${ready.length})</button>`);
   $('#dialog').classList.add('template-dialog');
   const selection=()=>new Set($$('[data-plan-select]:checked').map(c=>c.dataset.planSelect));
-  function update(){const selected=selection(),review=ready.some(e=>selected.has(e.id)&&e.duplicates.length);$('#plan-reason-area').hidden=!review;$('#apply-plan').disabled=!selected.size||(review&&!$('#plan-duplicate-reason').value.trim());$('#apply-plan').textContent=`Заполнить выбранные (${selected.size})`;const all=$('#plan-select-all');if(all){all.checked=selected.size===ready.length;all.indeterminate=selected.size>0&&selected.size<ready.length;}}
+  function update(){const selected=selection(),review=ready.some(e=>selected.has(e.id)&&e.duplicates.length);$('#plan-reason-area').hidden=true;$('#apply-plan').disabled=!selected.size;$('#apply-plan').textContent=`Заполнить выбранные (${selected.size})`;const all=$('#plan-select-all');if(all){all.checked=selected.size===ready.length;all.indeterminate=selected.size>0&&selected.size<ready.length;}}
   $$('[data-plan-select]').forEach(c=>c.onchange=update);
   if($('#plan-select-all'))$('#plan-select-all').onchange=e=>{$$('[data-plan-select]').forEach(c=>c.checked=e.target.checked);update();};
   $('#plan-duplicate-reason').oninput=update;
   bind('#plan-open-first',()=>open((missing[0]||plan.entries[0]).id));
   bind('#apply-plan',async()=>{
    const selected=selection();if(!selected.size)throw new Error('Выберите карточки для заполнения');
-   const reason=$('#plan-duplicate-reason').value.trim();if(ready.some(e=>selected.has(e.id)&&e.duplicates.length)&&!reason)throw new Error('Укажите причину продолжения с совпадениями');
+   const reason=$('#plan-duplicate-reason').value.trim();
    const result=await api('/api/template-plan/'+plan.id+'/apply',json('POST',{confirmed:true,ids:[...selected],duplicate_reason:reason}));
    await reloadCards();const saved=result.filter(r=>r.status==='updated');if(saved.length)state.selected=new Set(saved.map(r=>r.id));
    if(['cards','drafts'].includes(state.page))registry();
