@@ -81,7 +81,7 @@ def test_new_card_prepares_with_stored_category_and_brand_without_retyping(env):
     def transport(request):
         if request.url.path=='/v3/attributes':
             from nk_manager.creation import NAMES
-            return httpx.Response(200,json={'result':[{'attr_id':int(id),'attr_name':name,'attr_type':'o','attr_field_type':'text'} for id,name in NAMES.items()]})
+            return httpx.Response(200,json={'result':[{'attr_id':int(id),'attr_name':name,'attr_type':'m' if id in ('3959','13933') else 'o','attr_field_type':'text',**({'attr_preset_only':True,'attr_preset':['dictionary input differs from read-back code']} if id in ('3959','13933') else {})} for id,name in NAMES.items()]})
         return remote.handle(request)
     engine.client.transport=httpx.MockTransport(transport)
     job=engine.prepare('tester','save',c['id'],c['revision'])
@@ -90,6 +90,10 @@ def test_new_card_prepares_with_stored_category_and_brand_without_retyping(env):
     assert payload['categories']==[int(acdc()['category_id'])]
     assert payload['good_name']=='LM50-23B24R2 AC/DC преобразователь'
     assert payload['gtin']=='04640000000028'
+    assert payload['tnved']=='8504409100'
+    assert not any(a['attr_id'] in (3959,13933) for a in payload['good_attrs'])
+    assert service.get(c['id'])['attributes'][key('3959')]=='8504'
+    assert service.get(c['id'])['attributes'][key('13933')]=='8504409100'
     assert any(a['attr_id']==2478 and a['attr_value']==payload['good_name'] for a in payload['good_attrs'])
     assert not any(r[1]=='/v3/feed' for r in remote.requests)
 

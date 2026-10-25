@@ -359,6 +359,11 @@ class Engine:
                     match = re.search(r"\[#(\d+)\]", key)
                     if not match:
                         raise ValueError("Поле без официального ID атрибута: "+key)
+                    # With a full 10-digit top-level tnved, NK derives both
+                    # classification attributes itself. Read-back values are
+                    # not necessarily valid dictionary input (e.g. 3959=8536).
+                    if match[1] in ('3959','13933'):
+                        continue
                     attr={"attr_id":int(match[1]),"attr_value":value}
                     if card["attributes"].get(key+"::unit"):
                         attr["attr_value_type"]=card["attributes"][key+"::unit"]
