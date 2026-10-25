@@ -132,8 +132,10 @@ def recover_missing_pn(store):
 class Engine:
     def __init__(self, store, transport=None):
         self.store = store
+        from .bulk_creation import SCHEMA as BULK_SCHEMA
         with store.connect() as db:
             db.executescript(SCHEMA)
+            db.executescript(BULK_SCHEMA)
             db.execute("UPDATE settings SET value='2' WHERE key='schema_version'")
         self.path = store.directory / "nk-secrets.json"
         self.client = Client(self.config, transport)
@@ -500,6 +502,8 @@ class Engine:
 
             from .draft_workflow import advance
             advance(self)
+            from .bulk_creation import advance as advance_creation
+            advance_creation(self)
 
     def sync_tick(self, job):
         payload = json.loads(job["payload"])
