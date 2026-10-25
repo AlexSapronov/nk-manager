@@ -10,6 +10,7 @@ from openpyxl import Workbook
 from .excel import read_workbook, valid_gtin
 from .store import audit, dumps, now, uid
 from . import presets
+from .creation import synchronize_identity, selected as selected_kind
 
 
 class Conflict(ValueError):
@@ -52,7 +53,10 @@ def validate_card(data):
     attrs = data.get("attributes", {})
     if not isinstance(attrs, dict) or len(attrs) > 500 or any(not isinstance(v, str) or len(v) > 30000 for v in attrs.values()):
         raise ValueError("Характеристики: до 500 текстовых значений по 30 000 символов")
-    clean["attributes"] = attrs
+    clean["attributes"] = dict(attrs)
+    synchronize_identity(clean)
+    if len(clean["name"]) > 2000:
+        raise ValueError("Полное наименование превышает 2000 символов")
     return clean
 
 
@@ -71,11 +75,16 @@ class Service:
 
     def save(self, actor, data, id=None, admin=False):
         clean = validate_card(data)
+        creation = selected_kind(self.store, clean['tnved'], data['creation_kind_id']) if data.get('creation_kind_id') else None
+        if creation and (clean['category'] != creation['category'] or clean['attributes'].get('Вид товара [#12]') != creation['nk_kind'] or creation['other_kind'] and clean['attributes'].get('Вид товара (при отсутствии в справочнике) [#23828]') != creation['other_kind']):
+            raise ValueError('Вид товара или категория изменились. Повторите выбор вида товара')
         with self.store.transaction() as db:
             old = db.execute("SELECT * FROM cards WHERE id=?", (id,)).fetchone() if id else None
             if id and not old:
                 raise ValueError("Карточка не найдена")
             if old:
+                if creation and old["external_id"]:
+                    raise ValueError("Категория связанной карточки НК не меняется через эталон создания")
                 active = db.execute("SELECT id FROM nk_jobs WHERE card_id=? AND state NOT IN ('confirmed','failed','cancelled')", (id,)).fetchone() if db.execute("SELECT 1 FROM sqlite_master WHERE name='nk_jobs'").fetchone() else None
                 if active:
                     raise Conflict("Выполняется операция НК. Сначала дождитесь результата или выполните сверку")
@@ -97,6 +106,10 @@ class Service:
             else:
                 db.execute("INSERT INTO cards VALUES(?,NULL,'local',NULL,?,?,?,?,?,?,?,'{}',1,?,0,1,?,?)",
                            (id, clean["pn"], clean["gtin"], clean["tnved"], clean["category"], clean["card_type"], clean["name"], dumps(clean["attributes"]), actor, stamp, stamp))
+            if creation:
+                metadata={**(json.loads(old['source_snapshot']) if old else {}),'creation':{'kind_id':creation['id'],'tnved':clean['tnved'],'cat_id':creation['category_id']}}
+                db.execute('UPDATE cards SET source_snapshot=? WHERE id=?', (dumps(metadata),id))
+                db.execute('INSERT OR REPLACE INTO nk_scopes VALUES(?,?)', (id,creation['category_id']))
             audit(db, actor, "card_saved", id, {"before_revision": old["revision"] if old else None, "values": clean, "duplicate_reason": data.get("duplicate_reason"), "candidates": duplicates})
         return self.get(id)
 
