@@ -6,11 +6,15 @@
       "status": "passed"
     },
     {
-      "name": "Card created and retained after page reload",
+      "name": "PN/TN VED/brand/kind wizard, derived name updates with PN, local card retained after reload",
       "status": "passed"
     },
     {
       "name": "Real XLSX mapping, preview, confirmation and import",
+      "status": "passed"
+    },
+    {
+      "name": "Existing local card can change kind; full name and identity update while other filled defaults persist",
       "status": "passed"
     },
     {
@@ -39,6 +43,7 @@
     }
   ],
   "screenshots": [
+    "creation-wizard.png",
     "live-registry.png",
     "live-editor.png",
     "live-admin.png",

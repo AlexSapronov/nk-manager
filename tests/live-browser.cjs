@@ -31,9 +31,17 @@ async function main(){
  await page.locator('#login-username').fill('tester');await page.locator('#login-form button[type="submit"]').click();await visible('.registry');
  assert.equal(await page.locator('#rows tbody tr').count(),0);assert((await page.locator('.empty').innerText()).includes('Каталог пуст'));
  assert.equal(await page.locator('nav a[href="#admin"]').count(),0);check('Login, empty real database and employee navigation');
- await page.locator('#create').click();await page.locator('#field-pn').fill('BROWSER-ALPHA');await page.locator('#field-name').fill('Локальный товар');await page.locator('#field-tnved').fill('8536901000');
+ await page.locator('#create').click();await visible('#creation-pn');
+ await page.locator('#creation-pn').fill('BROWSER-ALPHA');await page.locator('#creation-tnved').fill('8536901000');await page.locator('#creation-brand').fill('Hsuan Mao');
+ const dictionary=(await(await page.request.get(origin+'/api/creation/catalog')).json()).kinds;
+ const cable=dictionary.find(k=>k.tnved==='8536901000'&&k.name==='Разъём на кабель');
+ await page.locator('#creation-kind').selectOption(cable.id);assert.equal(await page.locator('#creation-name').innerText(),'BROWSER-ALPHA Разъём на кабель');
+ for(const width of [1366,900,390]){await page.setViewportSize({width,height:900});assert(await page.evaluate(()=>{const d=document.querySelector('#dialog');return d.scrollWidth<=d.clientWidth+1&&d.getBoundingClientRect().width<=innerWidth;}),'Creation dialog overflow '+width);}
+ await page.setViewportSize({width:1366,height:900});await shot('creation-wizard');
+ await page.locator('#creation-prepare').click();await visible('#field-pn');assert.equal(await page.locator('#field-name').inputValue(),'BROWSER-ALPHA Разъём на кабель');assert(await page.locator('#field-name').getAttribute('readonly')!==null);
+ await page.locator('#field-pn').fill('BROWSER-BETA');assert.equal(await page.locator('#field-name').inputValue(),'BROWSER-BETA Разъём на кабель');await page.locator('#field-pn').fill('BROWSER-ALPHA');
  await page.locator('#save-card').click();await page.waitForFunction(()=>document.querySelector('.drawer-head')?.innerText.includes('Ревизия 1'));await page.locator('#close-drawer').click();
- await page.reload();await visible('.registry');assert.equal(await page.locator('#rows tbody tr').count(),1);check('Card created and retained after page reload');
+ await page.reload();await visible('.registry');assert.equal(await page.locator('#rows tbody tr').count(),1);check('PN/TN VED/brand/kind wizard, derived name updates with PN, local card retained after reload');
  // A genuine XLSX is written as test input, never added to the user's database.
  const xlsx=path.join(dir,'catalog.xlsx');
  const fixture="from openpyxl import Workbook; import sys; b=Workbook(); w=b.active; w.append(['PN','GTIN','ТН ВЭД','Категория','Тип карточки','Наименование','Статус карточки','Страна','Общий признак','Материал']); w.append(['CONNECTOR777','04640000000011','8536901000','Соединители','Единичный','Соединитель','Опубликована','','Общий','']); b.save(sys.argv[1])";
@@ -43,6 +51,14 @@ async function main(){
  assert(!(await page.locator('#import-body').innerText()).includes('неверный формат'));await page.locator('#import-next').click();await visible('#confirm-import');await page.locator('#confirm-import').check();await page.locator('#import-next').click();await visible('#dialog[open]');
  assert((await page.locator('#dialog').innerText()).includes('1 записей сохранено'));await page.locator('#dialog [data-close]').first().click();
  await page.locator('nav a[href="#cards"]').click();await visible('.registry');assert.equal(await page.locator('#rows tbody tr').count(),2);await shot('live-registry');check('Real XLSX mapping, preview, confirmation and import');
+ await page.locator('#search').fill('BROWSER-ALPHA');await page.locator('[data-open]').click();
+ await page.locator('#choose-product-kind').click();await visible('#creation-pn');assert.equal(await page.locator('#creation-brand').inputValue(),'Hsuan Mao');
+ const replacement=dictionary.find(k=>k.tnved==='8536901000'&&k.id!==cable.id);
+ await page.locator('#creation-kind').selectOption(replacement.id);await page.locator('#creation-prepare').click();await page.locator('#dialog').waitFor({state:'hidden'});assert.equal(await page.locator('#field-name').inputValue(),'BROWSER-ALPHA '+replacement.name);
+ await page.locator('#save-card').click();await page.waitForFunction(()=>document.querySelector('.drawer-head')?.innerText.includes('Ревизия 2'));await page.locator('#close-drawer').click();
+ const afterKind=(await(await page.request.get(origin+'/api/cards')).json()).find(c=>c.pn==='BROWSER-ALPHA');
+ assert.equal(afterKind.attributes['Товарный знак [#2504]'],'Hsuan Mao');assert.equal(afterKind.attributes['Код ОКПД2 [#3961]'],'27.33.13.110');
+ check('Existing local card can change kind; full name and identity update while other filled defaults persist');
  await page.locator('#search').fill('CONNECTOR777');await page.locator('[data-open]').click();await page.locator('#claim-card').click();await page.waitForFunction(()=>document.querySelector('.drawer-head')?.innerText.includes('Ревизия 2'));
  await page.locator('[data-tab="attributes"]').click();await visible('#toggle-attribute-fields');await page.locator('#toggle-attribute-fields').click();await visible('[data-attribute="Страна"]');await page.locator('[data-attribute="Страна"]').fill('Китай');await page.locator('#save-card').click();await page.waitForFunction(()=>document.querySelector('.drawer-head')?.innerText.includes('Ревизия 3'));await shot('live-editor');
  await page.locator('#close-drawer').click();await page.reload();await visible('.registry');await page.locator('#search').fill('CONNECTOR777');await page.locator('[data-open]').click();await page.locator('[data-tab="attributes"]').click();assert.equal(await page.locator('[data-attribute="Страна"]').inputValue(),'Китай');await page.locator('#close-drawer').click();check('Claim and persistent edit of imported source attributes');
@@ -56,7 +72,8 @@ async function main(){
  await page.locator('nav a[href="#templates"]').click();await visible('#import-template');
  assert.equal(await page.locator('[data-preset-create]').count(),11);
  const preset=page.locator('.template-card').filter({has:page.getByRole('heading',{name:'Эталон опубликованных — 8536901000',exact:true})});
- await preset.locator('[data-preset-create]').click();await visible('#field-pn');assert.equal(await page.locator('#field-tnved').inputValue(),'8536901000');
+ await preset.locator('[data-preset-create]').click();await visible('#creation-pn');assert.equal(await page.locator('#creation-tnved').inputValue(),'8536901000');
+ await page.locator('#creation-pn').fill('PRESET-NEW');await page.locator('#creation-brand').fill('Hsuan Mao');await page.locator('#creation-kind').selectOption(cable.id);await page.locator('#creation-prepare').click();await visible('#field-pn');assert.equal(await page.locator('#field-name').inputValue(),'PRESET-NEW Разъём на кабель');
  await page.locator('[data-tab="attributes"]').click();assert.equal(await page.locator('[data-attribute="Код ОКПД2 [#3961]"]').inputValue(),'27.33.13.110');
  page.once('dialog',d=>d.accept());await page.locator('#close-drawer').click();check('11 built-in presets available and create local draft with modal OKPD2');
  await page.locator('#import-template').click();

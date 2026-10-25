@@ -346,9 +346,11 @@ class Engine:
                     raise ValueError("Для создания нужны PN, название, ТН ВЭД и существующий/официально выделенный GTIN")
                 scope=self.store.one("SELECT cat_id FROM nk_scopes WHERE card_id=?",(card_id,))
                 cat_id = options.get("cat_id") or (scope["cat_id"] if scope else None)
-                if not str(cat_id or "").isdigit() or not str(options.get("brand", "")).strip():
+                from .creation import value as attribute_value
+                brand=str(options.get("brand") or attribute_value(card["attributes"],"2504")).strip()
+                if not str(cat_id or "").isdigit() or not brand:
                     raise ValueError("Выберите ID категории и укажите бренд для создания")
-                entry = {"gtin": card["gtin"], "good_name": card["name"], "tnved": card["tnved"], "brand": options["brand"], "categories": [int(cat_id)],
+                entry = {"gtin": card["gtin"], "good_name": card["name"], "tnved": card["tnved"], "brand": brand, "categories": [int(cat_id)],
                          "is_set": False, "is_kit": False, "is_tech_gtin": False, "moderation": 0,
                          "identified_by": [{"value":card["gtin"],"type":"gtin","level":"trade-unit","multiplier":1,"unit":"шт"}], "good_attrs": []}
                 for key, value in card["attributes"].items():

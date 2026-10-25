@@ -222,6 +222,16 @@ def create_app(data_directory=None):
         return Response(xlsx if is_xlsx else bundle, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if is_xlsx else "application/zip",
                         headers={"Content-Disposition": f'attachment; filename="nk-catalog-analysis.{"xlsx" if is_xlsx else "zip"}"'})
 
+    @app.get("/api/creation/catalog")
+    def creation_catalog(user=Depends(session)):
+        from nk_manager.creation import catalog
+        return {'kinds':catalog(store)}
+
+    @app.post("/api/creation/preview")
+    def creation_preview(data: dict, user=Depends(session)):
+        from nk_manager.creation import draft
+        return draft(store,data)
+
     @app.get("/api/templates")
     def templates(user=Depends(session)):
         from nk_manager.presets import installed

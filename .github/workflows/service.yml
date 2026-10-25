@@ -17,6 +17,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: node tests/field-visibility.cjs
+      - run: node tests/creation-ui.cjs
       - run: node tests/live-browser.cjs
         env:
           NK_TEST_PYTHON: python
@@ -35,5 +36,6 @@ jobs:
             docs/nk-browser-report.json
             docs/template-browser-report.json
             docs/screenshots/template-*.png
+            docs/screenshots/creation-*.png
             docs/screenshots/nk-*.png
             docs/screenshots/live-*.png
