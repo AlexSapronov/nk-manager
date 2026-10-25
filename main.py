@@ -247,6 +247,20 @@ def create_app(data_directory=None):
         service.approve_template(user["username"], id)
         return {"ok": True}
 
+    @app.post("/api/normalization/preview")
+    def normalization_preview(data: dict,user=Depends(session)):
+        from nk_manager.normalization_service import preview
+        ids=data.get('ids')
+        if ids is not None and (not isinstance(ids,list) or len(ids)>10000 or any(not isinstance(i,str) for i in ids)):
+            raise ValueError('Выберите до 10000 карточек')
+        return preview(service,user['username'],ids)
+
+    @app.post("/api/normalization/{id}/apply")
+    def normalization_apply(id: str,data: dict,user=Depends(session)):
+        from nk_manager.normalization_service import apply
+        if data.get('confirmed') is not True:raise ValueError('Подтвердите изменения из предпросмотра')
+        return apply(service,user['username'],id,data.get('ids'),str(data.get('duplicate_reason') or ''))
+
     @app.post("/api/template-plan")
     def template_plan(data: dict, user=Depends(session)):
         ids = data.get("ids")
