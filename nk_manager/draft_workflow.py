@@ -11,15 +11,24 @@ def published(card):
     return raw.get('good_status')=='published' or 'published' in raw.get('good_detailed_status',[]) or 'опубликована' in str(card.get('external_status') or '').casefold()
 
 
-def published_index(cards):
+def published_index(cards,store=None):
+    from .nk import source_pn
+    # Unsaved-to-NK edits of a published local copy are not publication truth.
+    latest={r['card_id']:json.loads(r['raw']) for r in store.all('SELECT n.card_id,n.raw FROM nk_cards n JOIN cards c ON c.id=n.card_id WHERE c.dirty=1')} if store else {}
     result={}
     for c in cards:
-        if published(c) and c['pn'].strip():result.setdefault(c['pn'].strip(),[]).append(c['id'])
+        raw=latest.get(c['id'],c.get('source_snapshot',{}).get('nk',{}))
+        if raw:
+            if raw.get('good_status')!='published' and 'published' not in raw.get('good_detailed_status',[]):continue
+            pn=source_pn(raw)
+        elif published(c):pn=c['pn'].strip()
+        else:continue
+        if pn:result.setdefault(pn,[]).append(c['id'])
     return result
 
 
 def workspace(service,actor):
-    cards=service.cards();kinds=catalog(service.store);index=published_index(cards)
+    cards=service.cards();kinds=catalog(service.store);index=published_index(cards,service.store)
     known_ids={r['card_id'] for r in service.store.all('SELECT card_id FROM nk_cards')}
     from .service import candidates
     active={}

@@ -10,7 +10,7 @@ from .store import audit, dumps, now, uid
 def preview(service,actor,ids=None):
     cards=service.cards();kinds=catalog(service.store)
     from .draft_workflow import published_index
-    published=published_index(cards)
+    published=published_index(cards,service.store)
     selected=set(ids) if ids is not None else None
     busy={r['card_id'] for r in service.store.all("SELECT card_id FROM nk_jobs WHERE state NOT IN ('confirmed','failed','cancelled')")}
     entries=[]
@@ -46,7 +46,7 @@ def apply(service,actor,plan_id,ids,reason=''):
         entries=json.loads(plan['body']);selected=set(ids)
         if not selected.issubset({e['id'] for e in entries}):raise ValueError('Карточки отсутствуют в предпросмотре')
         from .draft_workflow import published_index
-        current_published=published_index(service.cards())
+        current_published=published_index(service.cards(),service.store)
         for entry in entries:
             if entry['id'] not in selected:continue
             identity={k:entry[k] for k in ('id','pn','name','gtin')}

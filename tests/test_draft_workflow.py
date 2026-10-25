@@ -105,3 +105,11 @@ def test_workspace_shows_actionable_nk_field_error(env):
     engine.state(job,'failed',{'error_details':{'items':[{'errors':[{'attr_id':'12','text':'Укажите вид товара'}]}]}},error='НК отклонил фид')
     row=next(r for r in workspace(svc,'tester')['entries'] if r['id']==c['id'])
     assert row['error']=='Укажите вид товара'
+
+
+def test_published_pn_uses_remote_truth_even_if_local_published_copy_is_edited(env):
+    store,svc,engine,remote,*_=env;c=ready(env,'REMOTE-PN')
+    raw=json.loads(json.dumps(remote.raw));raw.update(good_id=222,good_status='published',good_detailed_status=['published'],good_signed=True);raw['identified_by'][0]['value']='04640000000028'
+    pub_id=engine.apply_remote(raw);pub=svc.get(pub_id);pub['pn']='UNSENT-LOCAL-PN';svc.save('tester',pub,pub_id,admin=True)
+    row=next(r for r in workspace(svc,'tester')['entries'] if r['id']==c['id'])
+    assert row['published_ids']==[pub_id]
