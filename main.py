@@ -77,7 +77,7 @@ def create_app(data_directory=None):
                 return JSONResponse({"detail": "Проверка Origin не пройдена"}, status_code=403)
             if not request.headers.get("content-length", "").isdigit():
                 return JSONResponse({"detail": "Требуется Content-Length"}, status_code=411)
-        if request.url.path == "/api/import/preview":
+        if request.url.path in ("/api/import/preview", "/api/admin/creation-batches/preview"):
             length = request.headers.get("content-length", "")
             if not length.isdigit() or int(length) > 21 * 1024 * 1024:
                 return JSONResponse({"detail": "Загрузка: нужен Content-Length, максимум 20 МБ файла"}, status_code=413)
@@ -214,6 +214,37 @@ def create_app(data_directory=None):
     @app.get("/api/imports")
     def imports(user=Depends(session)):
         return store.all("SELECT i.id,i.filename,i.created,i.actor,r.results FROM imports i JOIN import_results r ON r.plan_id=i.id ORDER BY i.created DESC")
+
+    @app.get("/api/admin/creation-batches")
+    def creation_batches(user=Depends(admin)):
+        return store.all('SELECT id,filename,state,created FROM nk_creation_batches ORDER BY created DESC LIMIT 100')
+
+    @app.post("/api/admin/creation-batches/preview")
+    async def preview_creation_batch(file: UploadFile = File(...), user=Depends(admin)):
+        if not str(file.filename).lower().endswith('.xlsx'):
+            raise ValueError('Нужен файл XLSX')
+        content=await file.read(20*1024*1024+1)
+        await file.close()
+        if len(content)>20*1024*1024:raise HTTPException(413,'Файл превышает 20 МБ')
+        from nk_manager.bulk_creation import preview
+        filename=str(file.filename).replace('\\','/').split('/')[-1][:200]
+        return await run_in_threadpool(preview,nk,user['username'],content,filename)
+
+    @app.get("/api/admin/creation-batches/{id}")
+    def creation_batch(id: str,user=Depends(admin)):
+        from nk_manager.bulk_creation import snapshot
+        return snapshot(store,id)
+
+    @app.post("/api/admin/creation-batches/{id}/start")
+    def start_creation_batch(id: str,data: dict,user=Depends(admin)):
+        if data.get('confirmed') is not True:raise ValueError('Подтвердите создание карточек и выделение GTIN')
+        from nk_manager.bulk_creation import start
+        return start(nk,user['username'],id,data.get('kind_choices',{}))
+
+    @app.get("/api/admin/creation-batches/{id}/export")
+    def export_creation_batch(id: str,user=Depends(admin)):
+        from nk_manager.bulk_creation import export
+        return Response(export(store,id),media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':'attachment; filename="nk-cards-gtin.xlsx"'})
 
     @app.get("/api/export")
     def export(format: str = "zip", ids: str = "", user=Depends(session)):

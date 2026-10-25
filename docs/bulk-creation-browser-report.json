@@ -1,0 +1,8 @@
+{
+  "scope": "Admin XLSX upload through real HTTP/SQLite and synthetic NK",
+  "checks": [
+    "Admin uploads three input columns, explicitly chooses kind, allocates one GTIN per exact PN, creates NK draft, preserves duplicate/error rows, downloads XLSX with text GTIN, reopens durable batch; 1366/900/390 layouts"
+  ],
+  "errors": [],
+  "status": "passed"
+}
