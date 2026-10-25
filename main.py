@@ -247,6 +247,21 @@ def create_app(data_directory=None):
         service.approve_template(user["username"], id)
         return {"ok": True}
 
+    @app.get("/api/drafts/workspace")
+    def draft_workspace(user=Depends(session)):
+        from nk_manager.draft_workflow import workspace
+        return workspace(service,user['username'])
+
+    @app.post("/api/drafts/submit")
+    def draft_submit(data: dict,user=Depends(session)):
+        from nk_manager.draft_workflow import submit
+        ids=data.get('ids')
+        if data.get('confirmed') is not True or not isinstance(ids,list) or not ids or len(ids)>1000 or any(not isinstance(i,str) for i in ids):
+            raise ValueError('Выберите карточки и подтвердите отправку на модерацию')
+        revisions=data.get('revisions')
+        if not isinstance(revisions,dict) or any(type(revisions.get(i)) is not int for i in ids):raise ValueError('Обновите список карточек перед отправкой')
+        return submit(nk,user['username'],ids,bool(user['admin']),data.get('allow_duplicates') is True,revisions)
+
     @app.post("/api/normalization/preview")
     def normalization_preview(data: dict,user=Depends(session)):
         from nk_manager.normalization_service import preview

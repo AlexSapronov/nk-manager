@@ -105,10 +105,9 @@ def test_inferred_exact_duplicates_checked_together_before_any_write(tmp_path):
     with store.transaction() as db:db.execute('UPDATE cards SET name=?',('Разъём на кабель SAME',))
     plan=preview(svc,'tester')
     assert all(e['duplicates'] for e in plan['entries'])
-    assert all(r['status']=='warning' for r in apply(svc,'tester',plan['id'],ids))
-    assert all(not c['pn'] for c in svc.cards())
-    new=preview(svc,'tester')
-    assert all(r['status']=='updated' for r in apply(svc,'tester',new['id'],ids,'Проверены точные совпадения'))
+    assert all(r['status']=='updated' for r in apply(svc,'tester',plan['id'],ids))
+    assert all(c['pn']=='SAME' for c in svc.cards())
+    assert all(not e['changes'] for e in preview(svc,'tester')['entries'])
 
 
 def test_plan_ownership_and_unplanned_ids(tmp_path):

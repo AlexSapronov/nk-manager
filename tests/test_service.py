@@ -162,7 +162,7 @@ def test_revision_owner_and_duplicate_checks(app):
         saved = client.put(f"/api/cards/{card['id']}", json={**card, "name": "Новое"}, headers=headers)
         assert saved.status_code == 200
         assert client.put(f"/api/cards/{card['id']}", json=card, headers=headers).status_code == 409
-        assert client.post("/api/cards", json=data, headers=headers).status_code == 409
+        assert client.post("/api/cards", json=data, headers=headers).status_code == 200
         assert client.post("/api/cards", json={**data, "duplicate_reason": "Разные исполнения, сверены"}, headers=headers).status_code == 200
 
 

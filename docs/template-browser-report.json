@@ -4,7 +4,7 @@
     "90 empty-PN drafts: no false matches, names/GTIN visible, 89 checked cards saved, one left untouched, responsive dark dialog",
     "Next step opens incomplete card, unused empty fields hide/toggle, populated extra values stay visible and save with PN",
     "Concurrent revision change is explained with zero saved; retry rebuilds preview and succeeds",
-    "Real duplicate GTIN is still blocked until reason is entered; unchecked card is excluded",
+    "Local duplicate information is nonblocking; unchecked card is excluded",
     "No-change selection explains next action and cannot submit an empty operation"
   ],
   "errors": [],

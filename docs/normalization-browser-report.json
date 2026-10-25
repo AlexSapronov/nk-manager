@@ -2,7 +2,7 @@
   "scope": "Synthetic mixed drafts/statuses, actual HTTP/SQLite; no NK calls",
   "checks": [
     "Before/after preview, exact recovered PN, unresolved fields, status/owner/archive/busy exclusion, partial apply, only complete cards selected",
-    "Re-running is idempotent; inferred exact duplicate PN needs explicit reason"
+    "Re-running is idempotent; local exact duplicates do not require an explanation"
   ],
   "errors": [],
   "status": "passed"

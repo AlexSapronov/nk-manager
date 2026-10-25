@@ -33,6 +33,9 @@ jobs:
       - run: node tests/category-browser.cjs
         env:
           NK_TEST_PYTHON: python
+      - run: node tests/draft-workflow-browser.cjs
+        env:
+          NK_TEST_PYTHON: python
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -43,6 +46,8 @@ jobs:
             docs/template-browser-report.json
             docs/normalization-browser-report.json
             docs/category-browser-report.json
+            docs/draft-workflow-browser-report.json
+            docs/screenshots/draft-workspace*.png
             docs/screenshots/category-*.png
             docs/screenshots/normalization-*.png
             docs/screenshots/template-*.png

@@ -92,12 +92,10 @@ class Service:
                     raise Conflict("Карточка изменена в другой вкладке. Обновите данные; ваш ввод не отправлен")
                 if old["archived"]:
                     raise Conflict("Работа остановлена. Сначала восстановите карточку")
-                if old["owner"] != actor and not admin:
+                if old["owner"] not in ("",actor) and not admin:
                     raise Conflict("Карточку взял другой сотрудник. Попросите освободить её или обратитесь к администратору")
             all_cards = [dict(row) for row in db.execute("SELECT id,pn,gtin,name,external_status FROM cards")]
             duplicates = candidates(clean["pn"], clean["gtin"], all_cards, id)
-            if duplicates and not str(data.get("duplicate_reason", "")).strip():
-                raise Conflict("Есть точные совпадения PN/GTIN. Просмотрите совпадения и укажите причину продолжения")
             id = id or uid()
             stamp = now()
             if old:
@@ -222,9 +220,6 @@ class Service:
                     results.append({"row": number, "status": "conflict", "message": "Карточка изменилась после предпросмотра"})
                     continue
                 duplicates = candidates(clean["pn"], clean["gtin"], all_current, row["target"])
-                if duplicates and not duplicate_reason.strip():
-                    results.append({"row": number, "status": "warning", "message": "Нужно подтверждение совпадений с причиной"})
-                    continue
                 external_id = row["external_id"]
                 occupied = db.execute("SELECT card_id FROM source_keys WHERE key=?", (row["source_key"],)).fetchone() if row["source_key"] else None
                 if occupied and occupied["card_id"] != row["target"]:
@@ -415,9 +410,6 @@ class Service:
                     continue
                 # Recheck against the current catalogue, not just the preview.
                 matches = candidates(card["pn"], card["gtin"], [dict(c) for c in db.execute("SELECT * FROM cards")], card["id"])
-                if matches and not reason.strip():
-                    result.append({**identity, "status": "warning", "message": "Нужно подтверждение совпадений"})
-                    continue
                 attrs = json.loads(card["attributes"])
                 if db.execute("SELECT 1 FROM sqlite_master WHERE name='nk_jobs'").fetchone() and db.execute("SELECT 1 FROM nk_jobs WHERE card_id=? AND state NOT IN ('confirmed','failed','cancelled')",(card["id"],)).fetchone():
                     result.append({**identity,"status":"conflict","message":"Выполняется операция НК"})
@@ -427,7 +419,7 @@ class Service:
                     if (key in attrs or can_add) and not attrs.get(key, "").strip():
                         attrs[key] = value
                 db.execute("UPDATE cards SET attributes=?,dirty=1,owner=?,revision=revision+1,updated=? WHERE id=?", (dumps(attrs), actor, now(), entry["id"]))
-                audit(db, actor, "template_applied_local", entry["id"], {"template": entry["template_id"], "changes": entry["changes"], "duplicate_reason": reason if matches else None})
+                audit(db, actor, "template_applied_local", entry["id"], {"template": entry["template_id"], "changes": entry["changes"], "duplicate_reason": reason if matches else None,"candidates":matches})
                 result.append({**identity, "status": "updated", "message": "Сохранено локально"})
             db.execute("UPDATE plans SET applied=1 WHERE id=?", (id,))
         return result

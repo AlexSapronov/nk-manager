@@ -9,6 +9,8 @@ from .store import audit, dumps, now, uid
 
 def preview(service,actor,ids=None):
     cards=service.cards();kinds=catalog(service.store)
+    from .draft_workflow import published_index
+    published=published_index(cards)
     selected=set(ids) if ids is not None else None
     busy={r['card_id'] for r in service.store.all("SELECT card_id FROM nk_jobs WHERE state NOT IN ('confirmed','failed','cancelled')")}
     entries=[]
@@ -22,6 +24,8 @@ def preview(service,actor,ids=None):
             entries.append({**base,'state':'skipped','changes':[],'issues':[],'notes':[],'message':blocked,'duplicates':[]})
             continue
         result=propose(card,kinds)
+        if published.get((card['pn'] or result['after']['pn']).strip()):
+            entries.append({**base,'state':'skipped','changes':[],'issues':[],'notes':[],'message':'PN уже опубликован','duplicates':[]});continue
         entries.append({**base,**result,'state':'review' if result['issues'] else 'ready' if result['changes'] else 'unchanged','message':'Нужна проверка отдельных полей' if result['issues'] else 'Готово к приведению' if result['changes'] else 'Соответствует эталону','duplicates':candidates(result['after']['pn'],card['gtin'],cards,card['id'])})
     projected={e['id']:e['after'] for e in entries if 'after' in e}
     comparison=[{**c,**{k:projected[c['id']][k] for k in ('pn','name')} } if c['id'] in projected else c for c in cards]
@@ -41,6 +45,8 @@ def apply(service,actor,plan_id,ids,reason=''):
         if not plan or plan['applied']:raise Conflict('Предпросмотр отсутствует или уже применён')
         entries=json.loads(plan['body']);selected=set(ids)
         if not selected.issubset({e['id'] for e in entries}):raise ValueError('Карточки отсутствуют в предпросмотре')
+        from .draft_workflow import published_index
+        current_published=published_index(service.cards())
         for entry in entries:
             if entry['id'] not in selected:continue
             identity={k:entry[k] for k in ('id','pn','name','gtin')}
@@ -56,10 +62,10 @@ def apply(service,actor,plan_id,ids,reason=''):
             intended={e['id']:e['after'] for e in entries if e['id'] in selected and 'after' in e}
             comparison=[{**c,**{k:intended[c['id']][k] for k in ('pn','name')}} if c['id'] in intended else c for c in current]
             matches=candidates(after['pn'],card['gtin'],current+comparison,card['id'])
-            if matches and not str(reason).strip():
-                result.append({**identity,'status':'warning','message':'Подтвердите точные совпадения PN/GTIN'});continue
+            if current_published.get(after['pn'].strip()):
+                result.append({**identity,'status':'skipped','message':'Этот PN уже опубликован'});continue
             db.execute('UPDATE cards SET pn=?,tnved=?,name=?,card_type=?,attributes=?,owner=?,dirty=1,revision=revision+1,updated=? WHERE id=?',(after['pn'],after['tnved'],after['name'],after['card_type'],dumps(after['attributes']),actor,now(),card['id']))
-            audit(db,actor,'draft_normalized_local',card['id'],{'before':{k:card[k] for k in ('pn','tnved','name','card_type','attributes','owner','dirty')},'after':after,'changes':entry['changes'],'issues':entry['issues'],'duplicate_reason':reason if matches else None,'plan':plan_id})
+            audit(db,actor,'draft_normalized_local',card['id'],{'before':{k:card[k] for k in ('pn','tnved','name','card_type','attributes','owner','dirty')},'after':after,'changes':entry['changes'],'issues':entry['issues'],'duplicate_reason':reason if matches else None,'candidates':matches,'plan':plan_id})
             result.append({**identity,'pn':after['pn'],'name':after['name'],'status':'updated','message':'Приведено локально','issues':entry['issues']})
         db.execute('UPDATE plans SET applied=1 WHERE id=?',(plan_id,))
     return result

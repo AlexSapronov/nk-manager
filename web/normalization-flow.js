@@ -19,7 +19,7 @@ window.NormalizationFlow = (() => {
    '<button data-close>Отмена</button><button id="normalize-apply" class="primary">Применить выбранное</button>');
   $('#dialog').classList.add('template-dialog');
   const selection=()=>new Set($$('[data-normalize-select]:checked').map(b=>b.dataset.normalizeSelect));
-  const update=()=>{const selected=selection(),duplicates=ready.some(e=>selected.has(e.id)&&e.duplicates.length);$('#normalize-reason-area').hidden=!duplicates;$('#normalize-apply').disabled=!selected.size||(duplicates&&!$('#normalize-reason').value.trim());$('#normalize-apply').textContent=`Применить локально (${selected.size})`;const all=$('#normalize-all');all.checked=selected.size===ready.length&&!!ready.length;all.indeterminate=!!selected.size&&selected.size!==ready.length;};
+  const update=()=>{const selected=selection(),duplicates=ready.some(e=>selected.has(e.id)&&e.duplicates.length);$('#normalize-reason-area').hidden=true;$('#normalize-apply').disabled=!selected.size;$('#normalize-apply').textContent=`Применить локально (${selected.size})`;const all=$('#normalize-all');all.checked=selected.size===ready.length&&!!ready.length;all.indeterminate=!!selected.size&&selected.size!==ready.length;};
   $$('[data-normalize-select]').forEach(b=>b.onchange=update);$('#normalize-all').onchange=e=>{$$('[data-normalize-select]').forEach(b=>b.checked=e.target.checked);update();};$('#normalize-reason').oninput=update;
   $$('[data-normalize-open]').forEach(b=>b.onclick=()=>open(b.dataset.normalizeOpen));
   bind('#normalize-apply',async()=>{
