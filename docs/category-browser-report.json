@@ -1,0 +1,8 @@
+{
+  "scope": "Real service, synthetic long category names; no NK calls",
+  "checks": [
+    "Long names wrap within viewport in dark/light at 1366/900/390 px; search, exact selection, keyboard, Escape, click outside and reset work; distinct names remain separate"
+  ],
+  "errors": [],
+  "status": "passed"
+}
