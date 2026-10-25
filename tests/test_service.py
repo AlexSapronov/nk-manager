@@ -99,7 +99,8 @@ def test_failed_login_attempts_commit(app):
 def test_real_xlsx_import_idempotence_and_no_synthetic_nk_id(app):
     with TestClient(app, base_url=ORIGIN) as client:
         headers = login(client)
-        plan = preview(client, headers)
+        content = workbook()
+        plan = preview(client, headers, content)
         assert plan["mapping"]["pn"] == 0
         result = commit(client, headers, plan)
         assert result.status_code == 200, result.text
@@ -112,7 +113,7 @@ def test_real_xlsx_import_idempotence_and_no_synthetic_nk_id(app):
         assert card["attributes"]["Общий признак"] == "Общий"
         assert card["source_snapshot"]["row"] == 2
         assert card["external_status"] == "Опубликована"
-        response = client.post("/api/import/preview", files={"file": ("again.xlsx", workbook())}, headers=headers)
+        response = client.post("/api/import/preview", files={"file": ("again.xlsx", content)}, headers=headers)
         assert response.status_code == 409
         assert len(client.get("/api/cards").json()) == 1
 
