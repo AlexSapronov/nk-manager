@@ -1,5 +1,4 @@
 from collections import Counter
-from difflib import SequenceMatcher
 import hashlib
 from io import BytesIO
 import json
@@ -25,19 +24,17 @@ def card_record(row):
 
 
 def candidates(pn, gtin, cards, exclude=None):
-    normalize = lambda text: re.sub(r"[\s\-–—_]", "", text.casefold())
     pn, gtin = str(pn or "").strip(), str(gtin or "").strip()
-    key = normalize(pn)
     matches = []
     for card in cards:
         if card["id"] == exclude:
             continue
-        other = normalize(card["pn"])
+        other = str(card["pn"] or "").strip()
         same_gtin = bool(gtin and card["gtin"] and gtin.zfill(14) == card["gtin"].zfill(14))
-        similarity = SequenceMatcher(None, key, other).ratio() if key and other else 0
-        reason = ("Совпадает GTIN — проверьте идентификатор" if same_gtin else "Точный PN" if key and other and pn.casefold() == card["pn"].casefold() else "Совпадает PN после нормализации" if key and other and key == other else "Похожий PN" if similarity >= .86 else "")
+        same_pn = bool(pn and pn == other)
+        reason = "Совпадает GTIN — проверьте идентификатор" if same_gtin else "Точный PN" if same_pn else ""
         if reason:
-            matches.append({"id": card["id"], "pn": card["pn"], "gtin": card["gtin"], "name": card.get("name", ""), "external_status": card.get("external_status"), "reason": reason, "score": 2 if same_gtin else similarity})
+            matches.append({"id": card["id"], "pn": card["pn"], "gtin": card["gtin"], "name": card.get("name", ""), "external_status": card.get("external_status"), "reason": reason, "score": 2 if same_gtin else 1})
     return sorted(matches, key=lambda c: -c["score"])[:10]
 
 
@@ -91,7 +88,7 @@ class Service:
             all_cards = [dict(row) for row in db.execute("SELECT id,pn,gtin,name,external_status FROM cards")]
             duplicates = candidates(clean["pn"], clean["gtin"], all_cards, id)
             if duplicates and not str(data.get("duplicate_reason", "")).strip():
-                raise Conflict("Есть точные или похожие PN/GTIN. Просмотрите совпадения и укажите причину продолжения")
+                raise Conflict("Есть точные совпадения PN/GTIN. Просмотрите совпадения и укажите причину продолжения")
             id = id or uid()
             stamp = now()
             if old:

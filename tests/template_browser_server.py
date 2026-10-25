@@ -15,6 +15,7 @@ if __name__=='__main__':
         raw['good_id']=20000+i
         raw['good_name']=f'Штепсельный разъём TEST-{i:03}' if i<90 else f'Реальное совпадение {i}'
         raw['good_attrs']=[a for a in raw['good_attrs'] if a['attr_id']!=13914]
+        raw['good_attrs'] += [{'attr_id':999999,'attr_name':'Неиспользуемое пустое поле','attr_value':''}, {'attr_id':999998,'attr_name':'Сохранённое дополнительное поле','attr_value':'Сохранить'}]
         raw['identified_by'][0]['value']=gtin(i+50 if i<90 else 500)
         app.state.nk.apply_remote(raw)
     uvicorn.run(app,host='127.0.0.1',port=int(os.environ['NK_TEST_PORT']),access_log=False)

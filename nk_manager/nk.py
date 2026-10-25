@@ -268,8 +268,8 @@ class Engine:
         if not config.get("api_key") or not config.get("writes_enabled"):
             raise ValueError("Администратор должен настроить API и разрешить внешние операции")
         latest_sync=self.store.one("SELECT state,updated FROM nk_jobs WHERE kind='sync' ORDER BY created DESC LIMIT 1")
-        if not latest_sync or latest_sync["state"]!="confirmed" or datetime.fromisoformat(latest_sync["updated"])<datetime.now(timezone.utc)-timedelta(minutes=15):
-            raise Conflict("Перед внешними действиями завершите свежую синхронизацию всего каталога (не старше 15 минут)")
+        if not latest_sync or latest_sync["state"]!="confirmed":
+            raise Conflict("Перед внешними действиями завершите синхронизацию всего каталога: откройте «Партии» и дождитесь подтверждения")
         with self.lock:
             found = self.store.one("SELECT * FROM cards WHERE id=?", (card_id,))
             if not found:

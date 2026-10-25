@@ -298,6 +298,11 @@ def create_app(data_directory=None):
             raise ValueError("Введите ТН ВЭД от 4 до 10 цифр")
         return nk.client.call("GET","/v3/categories",{"tnved":tnved})
 
+    @app.get("/api/nk/field-profile")
+    def nk_field_profile(tnved: str = "", user=Depends(session)):
+        from nk_manager.fields import published_fields
+        return published_fields(store, tnved.strip())
+
     @app.get("/api/nk/schema/{cat_id}")
     def nk_schema(cat_id: int, user=Depends(session)):
         return nk.schema(cat_id)

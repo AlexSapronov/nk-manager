@@ -257,13 +257,37 @@ def test_create_uses_provided_gtin_and_confirmed_remote_id(env):
     assert "good_id" not in sent
 
 
-def test_stale_sync_and_environment_switch_are_blocked(env):
+def test_old_confirmed_sync_allows_operation_with_live_card_check(env):
     store,service,engine,remote,*_=env
     with pytest.raises(Conflict):engine.save_config("a",{"environment":"sandbox","api_key":"other"})
     with store.transaction() as db:
         db.execute("UPDATE nk_jobs SET updated=? WHERE kind='sync'",((datetime.now(timezone.utc)-timedelta(hours=1)).isoformat(),))
     c=current(service)
-    with pytest.raises(Conflict):engine.prepare("tester","moderate",c["id"],c["revision"])
+    remote.requests.clear()
+    id=engine.prepare("tester","moderate",c["id"],c["revision"])
+    tick(engine)
+    assert store.one("SELECT state FROM nk_jobs WHERE id=?",(id,))["state"] != "failed"
+    paths=[r[1] for r in remote.requests]
+    assert paths.index("/v3/feed-product") < paths.index("/v3/feed-moderation")
+
+
+@pytest.mark.parametrize('sync_state', [None, 'prepared', 'failed'])
+def test_missing_or_incomplete_catalog_sync_blocks_external_action(env, tmp_path, sync_state):
+    store,service,engine,remote,*_=env
+    if sync_state is None:
+        store=Store(tmp_path/'unsynced')
+        engine=Engine(store,httpx.MockTransport(remote.handle))
+        engine.save_config("tester",{"api_key":"test-key-secret","writes_enabled":True})
+        service=Service(store)
+        service.save("tester",{"pn":"UNSYNCED"})
+    else:
+        with store.transaction() as db:
+            db.execute("UPDATE nk_jobs SET state=? WHERE kind='sync'", (sync_state,))
+    c=current(service)
+    remote.requests.clear()
+    with pytest.raises(Conflict, match='синхронизацию всего каталога'):
+        engine.prepare("tester","moderate",c["id"],c["revision"])
+    assert remote.requests == []
 
 
 def test_http_error_and_retry_after_never_expose_credential(tmp_path):
@@ -317,3 +341,18 @@ def test_signer_heartbeat_persists_and_rejects_wrong_cert(tmp_path,monkeypatch):
     assert client.post('/api/signer/heartbeat',json={**body,'thumbprint':'B'*40},headers=auth).status_code==422
     assert app.state.nk.status()['signer']==heartbeat
     assert client.post('/api/signer/next',json={},headers=auth).json()=={}
+
+
+def test_old_sync_still_blocks_remote_change_before_dispatch(env):
+    store,service,engine,remote,*_=env
+    with store.transaction() as db:
+        db.execute("UPDATE nk_jobs SET updated=? WHERE kind='sync'", ((datetime.now(timezone.utc)-timedelta(days=2)).isoformat(),))
+    c=current(service)
+    id=engine.prepare("tester","moderate",c["id"],c["revision"])
+    remote.raw["good_name"]="Изменено в НК после подготовки"
+    remote.requests.clear()
+    tick(engine)
+    job=store.one("SELECT state,error FROM nk_jobs WHERE id=?", (id,))
+    assert job["state"] == "failed" and "изменилась" in job["error"]
+    assert any(r[1]=="/v3/feed-product" for r in remote.requests)
+    assert not any(r[1]=="/v3/feed-moderation" for r in remote.requests)

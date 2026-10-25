@@ -15,7 +15,7 @@ def test_blank_or_separator_only_pn_are_not_duplicates():
     assert candidates('   ','',rows)==[]
     assert candidates('___','',rows)==[]
     assert candidates('','222',rows)[0]['reason'].startswith('Совпадает GTIN')
-    assert candidates('ABC-123','',[{'id':'x','pn':'abc123','gtin':'','name':'Товар'}])[0]['reason']=='Совпадает PN после нормализации'
+    assert candidates('ABC-123','',[{'id':'x','pn':'abc123','gtin':'','name':'Товар'}])==[]
 
 
 def drafts(tmp_path,n=3):
@@ -68,3 +68,15 @@ def test_unfinished_operation_is_explained_before_confirmation(tmp_path):
     Engine(store).enqueue('tester','save',{'entry':{}},svc.get(ids[0]))
     entry=svc.template_plan('tester',ids)['entries'][0]
     assert entry['changes']=={} and 'НК' in entry['message']
+
+
+@pytest.mark.parametrize('other', ['SEV100FDXL/12V', 'SEV100FDXM/24V', 'sev100fdxl/24v', 'SEV100FDXL24V', 'SEV100FDXL /24V', 'SEV100FDXL-24V'])
+def test_similar_component_pn_does_not_warn(other):
+    assert candidates('SEV100FDXL/24V', '', [{'id':'x','pn':other,'gtin':''}]) == []
+
+
+def test_exact_pn_or_gtin_warns_and_excludes_self():
+    rows=[{'id':'x','pn':' SEV100FDXL/24V ','gtin':'04640000000011'}]
+    assert candidates('SEV100FDXL/24V', '', rows)[0]['reason'] == 'Точный PN'
+    assert candidates('OTHER', '4640000000011', rows)[0]['reason'].startswith('Совпадает GTIN')
+    assert candidates('SEV100FDXL/24V', '', rows, exclude='x') == []
