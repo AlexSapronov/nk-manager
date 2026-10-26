@@ -61,6 +61,9 @@ def create_app(data_directory=None):
     if public.hostname in ("localhost", "127.0.0.1"):
         port = public.port or (443 if public.scheme == "https" else 80)
         origins |= {f"{public.scheme}://localhost:{port}", f"{public.scheme}://127.0.0.1:{port}"}
+    # Hostnames used only by a Windows signer over an explicitly enabled SSH forward.
+    # Do not relax Host validation for UI endpoints exposed on the corporate LAN.
+    allow_signer_tunnel = os.environ.get("NK_SIGNER_ALLOW_LOOPBACK_HOST", "0") == "1"
     cookie_name = "nk_session"
 
     @app.exception_handler(ValueError)
@@ -69,7 +72,12 @@ def create_app(data_directory=None):
 
     @app.middleware("http")
     async def security(request, call_next):
-        if request.url.hostname not in {urlsplit(origin).hostname for origin in origins}:
+        tunnel_signer = (
+            allow_signer_tunnel
+            and request.url.path.startswith("/api/signer/")
+            and request.url.hostname in {"localhost", "127.0.0.1"}
+        )
+        if request.url.hostname not in {urlsplit(origin).hostname for origin in origins} and not tunnel_signer:
             return JSONResponse({"detail": "Недопустимый Host"}, status_code=400)
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("origin")
