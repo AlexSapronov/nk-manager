@@ -1,0 +1,25 @@
+[Unit]
+Description=National Catalog Manager (NK Manager)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nkmanager
+Group=nkmanager
+WorkingDirectory=/opt/nk-manager
+EnvironmentFile=/etc/nk-manager.env
+ExecStart=/opt/nk-manager/.venv/bin/uvicorn main:create_app --factory --host 127.0.0.1 --port 8020 --workers 1 --no-access-log
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+StateDirectory=nk-manager
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nk-manager
+
+[Install]
+WantedBy=multi-user.target
