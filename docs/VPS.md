@@ -71,3 +71,48 @@ sudo ss -lntp | grep ':8020'
 Подписание с удалённого Windows-ПК по HTTP допускается **только
 через локальный SSH-туннель** (`localhost`); для прямого обращения к
 VPS из Windows-скрипта используйте HTTPS и отдельный токен подписанта.
+
+## Подписант Windows через SSH-туннель при корпоративном IP
+
+Если портал NK работает по `http://10.0.0.171:8020` и `NK_PUBLIC_URL` строго
+совпадает с этим адресом, локальный URL туннеля (`localhost`) иначе отвергается
+проверкой Host. Для **только** подписанта включите на VPS:
+
+```bash
+sudo sh -c 'printf "\\nNK_SIGNER_ALLOW_LOOPBACK_HOST=1\\n" >> /etc/nk-manager.env'
+sudo systemctl restart nk-manager
+```
+
+Флаг разрешает Host `localhost` / `127.0.0.1` исключительно на
+`/api/signer/*`. Веб-портал по-прежнему принимает только Host из
+`NK_PUBLIC_URL`. Подписант проверяет отдельный Bearer-токен и отпечаток
+сертификата; доступ к SSH разрешайте только доверенным пользователям.
+
+На Windows в **отдельном окне PowerShell**:
+
+```powershell
+ssh -o ExitOnForwardFailure=yes -N -L 127.0.0.1:18020:10.0.0.171:8020 smartuser@10.0.0.171
+```
+
+Окно SSH оставьте открытым. `http://127.0.0.1:18020/health` может ответить
+400: настройка намеренно разрешает loopback Host **только** на
+`/api/signer/*`. Это не ошибка самого туннеля. Чтобы проверить транспорт,
+используйте запрос с корпоративным Host:
+
+```powershell
+curl.exe --noproxy '*' -H "Host: 10.0.0.171:8020" http://127.0.0.1:18020/health
+```
+
+Получите SHA-1 сертификата:
+```powershell
+Get-ChildItem Cert:\\CurrentUser\\My | Where-Object HasPrivateKey | Select-Object Subject,Thumbprint,NotAfter
+```
+
+Из Ubuntu VPS скопируйте файлы `signer/Start-Signer.ps1` и
+`signer/Sign-Payload.vbs` **на Windows**, например через `scp`.
+Запускайте на Windows `Start-Signer.ps1 -Server http://127.0.0.1:18020
+-Thumbprint SHA1 -Diagnose`, затем с `-CheckConnection`. `-Diagnose`
+не требует соединения и не отправляет данные. Для `-CheckConnection`
+вставьте секретный signer connection token из админки NK при скрытом запросе;
+не передавайте его в командной строке или чате. Нельзя подставлять вместо
+него API KEY Национального каталога.
