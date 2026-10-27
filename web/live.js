@@ -126,7 +126,52 @@ async function admin(){await NkUI.refreshStatus();if(!state.user.admin){state.pa
 function unavailable(){return NkUI.actions([...state.selected]);}
 function help(){modal('Как работать с черновиками','<ol class="workflow-help"><li><b>Заполнить.</b> Откройте «Черновики» и нажмите «Заполнить автоматически». В оставшихся карточках укажите PN, ТН ВЭД, товарный знак и выберите вид товара. Сохраните.</li><li><b>Отправить.</b> Выберите готовые карточки и нажмите «Отправить на модерацию». Программа сохранит данные в НК и после подтверждения сама запустит модерацию.</li><li><b>Модерация.</b> Дождитесь результата НК. Ошибка, если она есть, появится у карточки.</li><li><b>Подписать.</b> Запустите Windows-подписант и нажмите «Подписать и опубликовать». Опубликованные товары появятся в разделе «Карточки».</li></ol><p>Черновики с уже опубликованным PN скрыты по умолчанию; их можно показать переключателем. Статусы обновляются автоматически. Подробности операций доступны в «Партиях».</p>');}
 $('#help-button').onclick=help;
-$('#login-form').onsubmit=async event=>{event.preventDefault();try{state.user=await api('/api/login',json('POST',{username:$('#login-username').value.trim(),admin_password:$('#login-password').value}));$('#login-password').value='';await start();}catch(error){$('#login-error').textContent=error.message;}};
+let activationCode='';
+function cancelActivation(){
+ activationCode='';
+ $('#password-setup').hidden=true;
+ $('#login-password').parentElement.hidden=false;
+ $('#login-password').value='';
+ $('#login-password').readOnly=false;
+ $('#new-password').value='';
+ $('#repeat-password').value='';
+ $('#new-password').required=false;
+ $('#repeat-password').required=false;
+ $('#login-submit').textContent='Войти';
+ $('#login-error').textContent='';
+}
+$('#cancel-password-setup').onclick=cancelActivation;
+$('#login-form').onsubmit=async event=>{
+ event.preventDefault();$('#login-error').textContent='';
+ try{
+  if(activationCode){
+   const response=await api('/api/password/activate',json('POST',{
+    username:$('#login-username').value.trim(),code:activationCode,
+    new_password:$('#new-password').value,repeat_password:$('#repeat-password').value
+   }));
+   state.user=response;cancelActivation();await start();
+  }else{
+   const result=await api('/api/login',json('POST',{username:$('#login-username').value.trim(),password:$('#login-password').value}));
+   if(result.password_setup_required){
+    activationCode=$('#login-password').value;
+    $('#login-password').parentElement.hidden=true;
+    $('#password-setup').hidden=false;
+    $('#new-password').required=true;$('#repeat-password').required=true;
+    $('#login-submit').textContent='Установить пароль и войти';
+    $('#new-password').focus();
+    return;
+   }
+   state.user=result;$('#login-password').value='';await start();
+  }
+ }catch(error){$('#login-error').textContent=error.message;}
+};
+$('#change-password').onclick=()=>{
+ modal('Сменить пароль',`<label class="field">Текущий пароль<input id="old-password" type="password" autocomplete="current-password"></label><label class="field">Новый пароль (минимум 8 символов)<input id="own-new-password" type="password" autocomplete="new-password" minlength="8"></label><label class="field">Повторите новый пароль<input id="own-repeat-password" type="password" autocomplete="new-password" minlength="8"></label>`,'<button id="save-password" class="primary">Сохранить</button><button data-close>Отмена</button>');
+ bind('#save-password',async()=>{
+  await api('/api/password/change',json('POST',{current_password:$('#old-password').value,new_password:$('#own-new-password').value,repeat_password:$('#own-repeat-password').value}));
+  $('#dialog').close();toast('Пароль изменён. Другие сеансы пользователя завершены.');
+ });
+};
 $('#logout').onclick=async()=>{if(!leave())return;try{await api('/api/logout',json('POST',{}));location.reload();}catch(e){toast(e.message);}};
 async function start(){await reloadCards();await NkUI.refreshStatus();$('#login-screen').hidden=true;$('#shell').hidden=false;$('#user-label').textContent=state.user.username+(state.user.admin?' · администратор':' · сотрудник');const page=location.hash.slice(1);state.page=labels[page]&&(page!=='admin'||state.user.admin)?page:'cards';await render();}
 window.addEventListener('hashchange',async()=>{if(!state.user)return;if(!leave()){history.replaceState(null,'','#'+state.page);return;}state.dirty=false;state.drawer=null;$('#drawer').hidden=true;state.page=labels[location.hash.slice(1)]?location.hash.slice(1):'cards';state.pageNo=1;await render();});
