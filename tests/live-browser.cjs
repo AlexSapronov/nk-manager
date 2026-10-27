@@ -84,6 +84,7 @@ async function main(){
  await page.locator('#search').fill('');await page.locator('#theme-toggle').click();await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');await shot('live-dark');
  for(const [width,height] of [[1440,900],[1920,1080],[390,844]]){await page.setViewportSize({width,height});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await shot(`live-${width}x${height}`);}
  check('Shared themes and desktop/mobile layouts of the real service');
+ await page.setViewportSize({width:1366,height:900}); // Sidebar footer is not shown in compact mobile layout.
  await page.locator('nav a[href="#admin"]').click();await visible('#new-user');
  await page.locator('#new-user').fill('first-login-user');await page.locator('#add-user').click();await visible('#temporary-code');
  const enrollmentCode=await page.locator('#temporary-code').inputValue();
