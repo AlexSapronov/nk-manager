@@ -9,8 +9,19 @@ function toast(text){$('#toast').textContent=text;$('#toast').hidden=false;clear
 async function api(path,options={}){
  const headers={...(options.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(state.user?{'X-CSRF-Token':state.user.csrf}:{}),...options.headers};
  let response;
- try{response=await fetch(path,{cache:'no-store',...options,headers});}catch(error){throw new Error('Нет соединения с сервисом. Введённые данные остаются в открытой форме.');}
- if(!response.ok){let body;try{body=await response.json();}catch(_){body={};}throw new Error(typeof body.detail==='string'?body.detail:`Ошибка ${response.status}. Обновите сессию или проверьте журнал сервиса.`);}
+ try{response=await fetch(path,{cache:'no-store',credentials:'same-origin',...options,headers});}catch(error){throw new Error('Нет соединения с сервисом. Введённые данные остаются в открытой форме.');}
+ if(response.status===403&&state.user&&path!=='/api/me'){
+  let detail='';try{detail=(await response.clone().json()).detail;}catch(_){}
+  if(detail==='Сессия изменилась; обновите страницу'){
+   // Multiple tabs can share the new cookie but have different CSRF tokens.
+   const fresh=await fetch('/api/me',{cache:'no-store',credentials:'same-origin'});
+   if(fresh.ok){state.user=await fresh.json();headers['X-CSRF-Token']=state.user.csrf;response=await fetch(path,{cache:'no-store',credentials:'same-origin',...options,headers});}
+  }
+ }
+ if(!response.ok){let body;try{body=await response.json();}catch(_){body={};}
+  if(response.status===401&&state.user)throw new Error('Сессия завершилась. Войдите снова после сохранения несохранённых данных.');
+  throw new Error(typeof body.detail==='string'?body.detail:`Ошибка ${response.status}. Проверьте журнал сервиса.`);
+ }
  return response.json();
 }
 const json=(method,body)=>({method,body:JSON.stringify(body)});
