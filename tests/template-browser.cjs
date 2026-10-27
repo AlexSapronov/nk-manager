@@ -9,7 +9,7 @@ async function main(){
  for(let i=0;i<150;i++){try{if((await fetch(origin+'/health')).ok)break;}catch(_){}if(child.exitCode!==null)throw new Error(logs);await new Promise(r=>setTimeout(r,100));}
  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.CHROMIUM_EXECUTABLE_PATH}:{}),args:process.env.CHROMIUM_ARGS?JSON.parse(process.env.CHROMIUM_ARGS):[]});
  const page=await browser.newPage({viewport:{width:1366,height:900},colorScheme:'dark'});page.on('pageerror',e=>report.errors.push(e.message));
- await page.goto(origin);await page.locator('#login-username').fill('tester');await page.locator('#login-form button[type="submit"]').click();await page.locator('.registry').waitFor();
+ await page.goto(origin);await page.locator('#login-username').fill('tester');await page.locator('#login-password').fill('isolated-test-admin-password');await page.locator('#login-form button[type="submit"]').click();await page.locator('.registry').waitFor();
  await page.locator('#search').fill('TEST-');assert.equal(await page.locator('#rows [data-open]').first().innerText(),'Штепсельный разъём TEST-089');
  await page.locator('#select-page').check();await page.locator('#select-filtered').click();assert((await page.locator('#bulk').innerText()).includes('Выбрано: 90'));
  await page.locator('#apply-templates').click();await page.locator('#apply-plan').waitFor();
