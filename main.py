@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from nk_manager import __version__
 from nk_manager.service import Conflict, Service, candidates
-from nk_manager.store import Store, audit, dumps, now, uid, verify_password
+from nk_manager.store import Store, audit, dumps, now, uid, verify_password, password_hash
 from nk_manager.nk import Engine
 
 ROOT = Path(__file__).resolve().parent
@@ -62,6 +62,33 @@ def create_app(data_directory=None):
         port = public.port or (443 if public.scheme == "https" else 80)
         origins |= {f"{public.scheme}://localhost:{port}", f"{public.scheme}://127.0.0.1:{port}"}
     cookie_name = "nk_session"
+    session_lifetime = 14 * 24 * 3600
+    refresh_window = 7 * 24 * 3600
+
+    def set_session_cookie(response, token):
+        response.set_cookie(cookie_name, token, httponly=True, secure=public.scheme == "https",
+                            samesite="lax", max_age=session_lifetime, path="/")
+
+    def issue_session(db, username, is_admin):
+        token, csrf = secrets.token_urlsafe(40), secrets.token_urlsafe(32)
+        db.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
+        db.execute("INSERT INTO sessions VALUES(?,?,?,?,?)",
+                   (hashlib.sha256(token.encode()).hexdigest(), username, int(is_admin),
+                    csrf, time.time() + session_lifetime))
+        audit(db, username, "login", "session", {"admin": bool(is_admin)})
+        return token, csrf
+
+    def password_from_form(data):
+        password, repeated = data.get("new_password"), data.get("repeat_password")
+        if not isinstance(password, str) or not isinstance(repeated, str):
+            raise ValueError("Введите новый пароль и его повтор")
+        if len(password) < 8:
+            raise ValueError("Пароль должен содержать минимум 8 символов")
+        if len(password) > 1024:
+            raise ValueError("Пароль слишком длинный")
+        if password != repeated:
+            raise ValueError("Пароли не совпадают")
+        return password
 
     @app.exception_handler(ValueError)
     async def invalid(request, exc):
@@ -84,6 +111,8 @@ def create_app(data_directory=None):
         elif request.headers.get("content-length", "").isdigit() and int(request.headers["content-length"]) > 3 * 1024 * 1024:
             return JSONResponse({"detail": "Запрос превышает 3 МБ"}, status_code=413)
         response = await call_next(request)
+        if getattr(request.state, "renew_session", False):
+            set_session_cookie(response, request.cookies[cookie_name])
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
