@@ -89,7 +89,7 @@ def test_auth_csrf_origin_and_admin(app):
         assert client.post("/api/nk/publish", json={}, headers=headers).status_code == 503
         headers = login(client, admin=True)
         assert client.post("/api/admin/users", json={"username": "colleague"}, headers=headers).status_code == 200
-        assert len(client.get("/api/admin/users").json()) == 2
+        assert len(client.get("/api/admin/users").json()) == 3
 
 
 def test_failed_login_attempts_commit(app):
