@@ -160,7 +160,7 @@ def create_app(data_directory=None):
         if not isinstance(data, dict) or not isinstance(data.get("username"), str) or not isinstance(data.get("password"), str):
             raise ValueError("Некорректные данные входа")
         username, password = data["username"].strip(), data["password"]
-        address = request.client.host if request.client else "unknown"
+        address = (request.client.host if request.client else "unknown") + ":" + username.casefold()
         with store.transaction() as db:
             attempt = db.execute("SELECT * FROM login_attempts WHERE ip=?", (address,)).fetchone()
             if attempt and attempt["until"] > time.time():
@@ -190,7 +190,7 @@ def create_app(data_directory=None):
             raise ValueError("Некорректные данные активации")
         new_password = password_from_form(data)
         username, code = data["username"].strip(), data["code"]
-        address = request.client.host if request.client else "unknown"
+        address = (request.client.host if request.client else "unknown") + ":" + username.casefold()
         with store.transaction() as db:
             attempt = db.execute("SELECT * FROM login_attempts WHERE ip=?", (address,)).fetchone()
             if attempt and attempt["until"] > time.time():
