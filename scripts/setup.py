@@ -19,15 +19,15 @@ def main():
         print("Уже настроено. Существующие данные и пароль сохранены.")
         return
     username = input("Username сотрудника [alexander]: ").strip() or "alexander"
-    password = getpass("Новый пароль администратора (минимум 12 символов): ")
+    password = getpass("Пароль первоначального администратора (минимум 8 символов): ")
     if password != getpass("Повторите пароль: "):
         raise SystemExit("Пароли различаются. Настройка не выполнена.")
     try:
         store.setup(username, password)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
-    print(f"Готово. Вход сотрудника: {username}, пароль не нужен.")
-    print("Вход администратора: тот же username + заданный отдельный пароль.")
+    print(f"Готово. Администратор: {username}. Вход по личному паролю.")
+    print("Новых сотрудников создайте в админке и передайте им одноразовые коды для установки пароля.")
     print(f"База: {store.path}")
 
 

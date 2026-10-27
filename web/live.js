@@ -9,8 +9,19 @@ function toast(text){$('#toast').textContent=text;$('#toast').hidden=false;clear
 async function api(path,options={}){
  const headers={...(options.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(state.user?{'X-CSRF-Token':state.user.csrf}:{}),...options.headers};
  let response;
- try{response=await fetch(path,{cache:'no-store',...options,headers});}catch(error){throw new Error('Нет соединения с сервисом. Введённые данные остаются в открытой форме.');}
- if(!response.ok){let body;try{body=await response.json();}catch(_){body={};}throw new Error(typeof body.detail==='string'?body.detail:`Ошибка ${response.status}. Обновите сессию или проверьте журнал сервиса.`);}
+ try{response=await fetch(path,{cache:'no-store',credentials:'same-origin',...options,headers});}catch(error){throw new Error('Нет соединения с сервисом. Введённые данные остаются в открытой форме.');}
+ if(response.status===403&&state.user&&path!=='/api/me'){
+  let detail='';try{detail=(await response.clone().json()).detail;}catch(_){}
+  if(detail==='Сессия изменилась; обновите страницу'){
+   // Multiple tabs can share the new cookie but have different CSRF tokens.
+   const fresh=await fetch('/api/me',{cache:'no-store',credentials:'same-origin'});
+   if(fresh.ok){const refreshed=await fresh.json();if(refreshed.username!==state.user.username)throw new Error('В другой вкладке выполнен вход в другую учётную запись. Обновите страницу.');state.user=refreshed;headers['X-CSRF-Token']=state.user.csrf;response=await fetch(path,{cache:'no-store',credentials:'same-origin',...options,headers});}
+  }
+ }
+ if(!response.ok){let body;try{body=await response.json();}catch(_){body={};}
+  if(response.status===401&&state.user)throw new Error('Сессия завершилась. Войдите снова после сохранения несохранённых данных.');
+  throw new Error(typeof body.detail==='string'?body.detail:`Ошибка ${response.status}. Проверьте журнал сервиса.`);
+ }
  return response.json();
 }
 const json=(method,body)=>({method,body:JSON.stringify(body)});
@@ -111,11 +122,71 @@ async function templates(){
 async function templatePlan(){await TemplateFlow.preview([...state.selected]);}
 
 async function batches(){await NkUI.refreshStatus();const data=await api('/api/imports');$('#main').innerHTML=heading('Партии и операции НК','Фактические результаты и подтверждения внешних операций')+NkUI.jobsHtml(state.nkStatus)+`<div class="stack">${data.map(p=>`<section class="section"><h2>${esc(p.filename)}</h2><p class="muted">${esc(p.created)} · ${esc(p.actor)}</p><p>${JSON.parse(p.results).filter(r=>['created','updated'].includes(r.status)).length} строк сохранено</p><button data-result="${p.id}">Показать результаты</button></section>`).join('')||'<div class="section empty"><b>Импортов пока нет</b>Здесь появятся партии после сохранения настоящих файлов.</div>'}</div>`;NkUI.bindJobs();$$('[data-result]').forEach(b=>b.onclick=()=>showResults('Результаты партии',JSON.parse(data.find(p=>p.id===b.dataset.result).results)));}
-async function admin(){await NkUI.refreshStatus();if(!state.user.admin){state.page='cards';await render();return;}const [health,users,events]=await Promise.all([api('/health'),api('/api/admin/users'),api('/api/admin/audit')]);$('#main').innerHTML=heading('Администрирование','Настоящая серверная сессия администратора')+`<section id="bulk-creation" class="section"></section>`+NkUI.adminHtml(state.nkStatus)+`<section class="section"><h2>НК и версия</h2><div class="notice">Проверьте ключ, выполните синхронизацию и подключите Windows-подписант. Внешние действия требуют отдельного подтверждения.</div><p>Версия ${esc(health.version)} · схема БД ${health.schema}<br>Commit <span class="mono">${esc(health.commit)}</span><br>Assets ${esc(health.assets)} · запуск ${esc(health.started)}</p></section><section class="section"><h2>Сотрудники</h2><p>${users.map(u=>esc(u.username)).join(', ')}</p><div class="actions"><input id="new-user" placeholder="Новый username" maxlength="64"><button id="add-user">Создать сотрудника</button></div></section><section class="section"><h2>Журнал последних действий</h2><div class="content-scroll"><table><tr><th>Время</th><th>Кто</th><th>Действие</th></tr>${events.map(e=>`<tr><td>${esc(e.created)}</td><td>${esc(e.actor)}</td><td>${esc(eventName(e.action))}</td></tr>`).join('')}</table></div></section>`;NkUI.bindAdmin();await BulkCreation.mount();bind('#add-user',async()=>{await api('/api/admin/users',json('POST',{username:$('#new-user').value}));await admin();});}
+async function admin(){await NkUI.refreshStatus();if(!state.user.admin){state.page='cards';await render();return;}const [health,users,events]=await Promise.all([api('/health'),api('/api/admin/users'),api('/api/admin/audit')]);$('#main').innerHTML=heading('Администрирование','Настоящая серверная сессия администратора')+`<section id="bulk-creation" class="section"></section>`+NkUI.adminHtml(state.nkStatus)+`<section class="section"><h2>НК и версия</h2><div class="notice">Проверьте ключ, выполните синхронизацию и подключите Windows-подписант. Внешние действия требуют отдельного подтверждения.</div><p>Версия ${esc(health.version)} · схема БД ${health.schema}<br>Commit <span class="mono">${esc(health.commit)}</span><br>Assets ${esc(health.assets)} · запуск ${esc(health.started)}</p></section><section class="section"><h2>Сотрудники</h2><div class="user-list">${users.map(u=>`<div class="row user-row"><b>${esc(u.username)}</b> <span class="muted">${u.is_admin?'Администратор':'Сотрудник'} · ${u.password_set?'Пароль установлен':'Ожидает первого входа'}</span> <button data-reset-password="${esc(u.username)}">Сбросить пароль</button></div>`).join('')}</div><div class="actions"><input id="new-user" placeholder="Новый username" maxlength="64"><button id="add-user">Создать сотрудника</button></div></section><section class="section"><h2>Журнал последних действий</h2><div class="content-scroll"><table><tr><th>Время</th><th>Кто</th><th>Действие</th></tr>${events.map(e=>`<tr><td>${esc(e.created)}</td><td>${esc(e.actor)}</td><td>${esc(eventName(e.action))}</td></tr>`).join('')}</table></div></section>`;NkUI.bindAdmin();await BulkCreation.mount();bind('#add-user',async()=>{const created=await api('/api/admin/users',json('POST',{username:$('#new-user').value}));await admin();showTemporaryCode(created);});
+ $$('[data-reset-password]').forEach(button=>button.onclick=async()=>{
+  const username=button.dataset.resetPassword;
+  if(!confirm('Сбросить пароль пользователя '+username+'? Все его сессии завершатся.'))return;
+  try{
+   const result=await api('/api/admin/users/'+encodeURIComponent(username)+'/reset-password',json('POST',{}));
+   if(username!==state.user.username)await admin();
+   showTemporaryCode(result);
+  }catch(error){showError(error);}
+ });
+}
+function showTemporaryCode(result){
+ modal('Одноразовый код: '+esc(result.username),`<p>Передайте этот код лично пользователю. При первом входе он укажет username и этот код, затем дважды введёт собственный пароль.</p><label class="field">Код (отображается только сейчас)<input id="temporary-code" readonly value="${esc(result.temporary_code)}"></label><p class="muted">Код хранится на сервере только в виде хеша. После установки пароля повторное использование невозможно.</p>`,'<button id="copy-temp-code" class="primary">Копировать код</button><button data-close>Закрыть</button>');
+ $('#temporary-code').onclick=()=>$('#temporary-code').select();
+ bind('#copy-temp-code',async()=>{await navigator.clipboard.writeText(result.temporary_code);toast('Код скопирован');});
+}
 function unavailable(){return NkUI.actions([...state.selected]);}
 function help(){modal('Как работать с черновиками','<ol class="workflow-help"><li><b>Заполнить.</b> Откройте «Черновики» и нажмите «Заполнить автоматически». В оставшихся карточках укажите PN, ТН ВЭД, товарный знак и выберите вид товара. Сохраните.</li><li><b>Отправить.</b> Выберите готовые карточки и нажмите «Отправить на модерацию». Программа сохранит данные в НК и после подтверждения сама запустит модерацию.</li><li><b>Модерация.</b> Дождитесь результата НК. Ошибка, если она есть, появится у карточки.</li><li><b>Подписать.</b> Запустите Windows-подписант и нажмите «Подписать и опубликовать». Опубликованные товары появятся в разделе «Карточки».</li></ol><p>Черновики с уже опубликованным PN скрыты по умолчанию; их можно показать переключателем. Статусы обновляются автоматически. Подробности операций доступны в «Партиях».</p>');}
 $('#help-button').onclick=help;
-$('#login-form').onsubmit=async event=>{event.preventDefault();try{state.user=await api('/api/login',json('POST',{username:$('#login-username').value.trim(),admin_password:$('#login-password').value}));$('#login-password').value='';await start();}catch(error){$('#login-error').textContent=error.message;}};
+let activationCode='';
+function cancelActivation(){
+ activationCode='';
+ $('#password-setup').hidden=true;
+ $('#login-password').parentElement.hidden=false;
+ $('#login-password').value='';
+ $('#login-password').readOnly=false;
+ $('#new-password').value='';
+ $('#repeat-password').value='';
+ $('#new-password').required=false;
+ $('#repeat-password').required=false;
+ $('#login-submit').textContent='Войти';
+ $('#login-error').textContent='';
+}
+$('#cancel-password-setup').onclick=cancelActivation;
+$('#login-form').onsubmit=async event=>{
+ event.preventDefault();$('#login-error').textContent='';
+ try{
+  if(activationCode){
+   const response=await api('/api/password/activate',json('POST',{
+    username:$('#login-username').value.trim(),code:activationCode,
+    new_password:$('#new-password').value,repeat_password:$('#repeat-password').value
+   }));
+   state.user=response;cancelActivation();await start();
+  }else{
+   const result=await api('/api/login',json('POST',{username:$('#login-username').value.trim(),password:$('#login-password').value}));
+   if(result.password_setup_required){
+    activationCode=$('#login-password').value;
+    $('#login-password').parentElement.hidden=true;
+    $('#password-setup').hidden=false;
+    $('#new-password').required=true;$('#repeat-password').required=true;
+    $('#login-submit').textContent='Установить пароль и войти';
+    $('#new-password').focus();
+    return;
+   }
+   state.user=result;$('#login-password').value='';await start();
+  }
+ }catch(error){$('#login-error').textContent=error.message;}
+};
+$('#change-password').onclick=()=>{
+ modal('Сменить пароль',`<label class="field">Текущий пароль<input id="old-password" type="password" autocomplete="current-password"></label><label class="field">Новый пароль (минимум 8 символов)<input id="own-new-password" type="password" autocomplete="new-password" minlength="8"></label><label class="field">Повторите новый пароль<input id="own-repeat-password" type="password" autocomplete="new-password" minlength="8"></label>`,'<button id="save-password" class="primary">Сохранить</button><button data-close>Отмена</button>');
+ bind('#save-password',async()=>{
+  await api('/api/password/change',json('POST',{current_password:$('#old-password').value,new_password:$('#own-new-password').value,repeat_password:$('#own-repeat-password').value}));
+  $('#dialog').close();toast('Пароль изменён. Другие сеансы пользователя завершены.');
+ });
+};
 $('#logout').onclick=async()=>{if(!leave())return;try{await api('/api/logout',json('POST',{}));location.reload();}catch(e){toast(e.message);}};
 async function start(){await reloadCards();await NkUI.refreshStatus();$('#login-screen').hidden=true;$('#shell').hidden=false;$('#user-label').textContent=state.user.username+(state.user.admin?' · администратор':' · сотрудник');const page=location.hash.slice(1);state.page=labels[page]&&(page!=='admin'||state.user.admin)?page:'cards';await render();}
 window.addEventListener('hashchange',async()=>{if(!state.user)return;if(!leave()){history.replaceState(null,'','#'+state.page);return;}state.dirty=false;state.drawer=null;$('#drawer').hidden=true;state.page=labels[location.hash.slice(1)]?location.hash.slice(1):'cards';state.pageNo=1;await render();});

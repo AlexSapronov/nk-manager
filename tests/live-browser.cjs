@@ -17,7 +17,7 @@ async function main(){
  const listener=createServer();await new Promise(r=>listener.listen(0,'127.0.0.1',r));const port=listener.address().port;await new Promise(r=>listener.close(r));
  const origin=`http://127.0.0.1:${port}`;
  const environment={...process.env,NK_DATA:path.join(dir,'data')};
- const setup=spawnSync(python,['-c',"import os; from nk_manager.store import Store; Store(os.environ['NK_DATA']).setup('tester','isolated-test-admin-password')"],{cwd:root,env:environment,encoding:'utf8'});
+ const setup=spawnSync(python,['-c',"import os; from nk_manager.store import Store, password_hash; s=Store(os.environ['NK_DATA']); s.setup('tester','isolated-test-admin-password'); db=s.connect(); db.execute('INSERT INTO users(username,password_hash) VALUES(?,?)',('employee',password_hash('employee-password'))); db.commit(); db.close()"],{cwd:root,env:environment,encoding:'utf8'});
  assert.equal(setup.status,0,setup.stderr);
  child=spawn(python,['scripts/run_wsl.py','--port',String(port)],{cwd:root,env:environment,stdio:['ignore','pipe','pipe']});
  child.stderr.on('data',d=>logs+=d.toString());
@@ -28,9 +28,9 @@ async function main(){
  const visible=selector=>page.locator(selector).waitFor({state:'visible'});
  const shot=async name=>{await page.screenshot({path:path.join(shots,name+'.png')});report.screenshots.push(name+'.png');};
  await page.goto(origin);await visible('#login-screen');
- await page.locator('#login-username').fill('tester');await page.locator('#login-form button[type="submit"]').click();await visible('.registry');
+ await page.locator('#login-username').fill('tester');await page.locator('#login-password').fill('isolated-test-admin-password');await page.locator('#login-form button[type="submit"]').click();await visible('.registry');
  assert.equal(await page.locator('#rows tbody tr').count(),0);assert((await page.locator('.empty').innerText()).includes('Каталог пуст'));
- assert.equal(await page.locator('nav a[href="#admin"]').count(),0);check('Login, empty real database and employee navigation');
+ assert.equal(await page.locator('nav a[href="#admin"]').count(),1);check('Login, empty real database and administrator navigation');
  await page.locator('#create').click();await visible('#creation-pn');
  await page.locator('#creation-pn').fill('BROWSER-ALPHA');await page.locator('#creation-tnved').fill('8536901000');await page.locator('#creation-brand').fill('Hsuan Mao');
  const dictionary=(await(await page.request.get(origin+'/api/creation/catalog')).json()).kinds;
@@ -84,6 +84,21 @@ async function main(){
  await page.locator('#search').fill('');await page.locator('#theme-toggle').click();await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');await shot('live-dark');
  for(const [width,height] of [[1440,900],[1920,1080],[390,844]]){await page.setViewportSize({width,height});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await shot(`live-${width}x${height}`);}
  check('Shared themes and desktop/mobile layouts of the real service');
+ await page.setViewportSize({width:1366,height:900}); // Sidebar footer is not shown in compact mobile layout.
+ await page.locator('nav a[href="#admin"]').click();await visible('#new-user');
+ await page.locator('#new-user').fill('first-login-user');await page.locator('#add-user').click();await visible('#temporary-code');
+ const enrollmentCode=await page.locator('#temporary-code').inputValue();
+ assert(enrollmentCode.length>=8);await page.locator('#dialog [data-close]').first().click();
+ await page.locator('#logout').click();await visible('#login-screen');
+ await page.locator('#login-username').fill('first-login-user');
+ await page.locator('#login-password').fill(enrollmentCode);
+ await page.locator('#login-submit').click();await visible('#password-setup');
+ await page.locator('#new-password').fill('simplepass8');await page.locator('#repeat-password').fill('does-not-match');
+ await page.locator('#login-submit').click();
+ await page.locator('#login-error').getByText('Пароли не совпадают').waitFor();
+ await page.locator('#repeat-password').fill('simplepass8');await page.locator('#login-submit').click();
+ await visible('.registry');assert.equal(await page.locator('nav a[href="#admin"]').count(),0);
+ check('Admin created user; temporary code requires matching 8-character password and opens employee workspace');
  assert.deepEqual(report.errors,[]);report.status='passed';report.browser=browser.version();
 }
 main().catch(error=>{report.status='failed';report.failure=error.stack;report.serverLogs=logs.slice(-4000);process.exitCode=1;console.error(error);}).finally(async()=>{if(browser)await browser.close();if(child)child.kill('SIGTERM');fs.mkdirSync(shots,{recursive:true});fs.writeFileSync(path.join(root,'docs/live-browser-report.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));fs.rmSync(dir,{recursive:true,force:true});});
