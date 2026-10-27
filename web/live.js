@@ -4,7 +4,7 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const labels={cards:'Карточки',drafts:'Черновики',import:'Импорт Excel',batches:'Партии',templates:'Шаблоны',admin:'Администрирование'};
 const icons={cards:'▦',drafts:'▤',import:'↥',batches:'☷',templates:'◇',admin:'⚙'};
 const state={user:null,cards:[],page:'cards',query:'',category:'',tnved:'',filter:'all',selected:new Set(),pageNo:1,drawer:null,tab:'main',dirty:false,expanded:false,file:null,importPlan:null,importStep:1,importPurpose:'catalog',header:1,sheet:'',mapping:null,importDefaults:{category:'',tnved:'',card_type:''}};
-let toastTimer;
+let toastTimer, pendingSetup=null;
 function toast(text){$('#toast').textContent=text;$('#toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').hidden=true,6500);}
 async function api(path,options={}){
  const headers={...(options.body instanceof FormData?{}:{'Content-Type':'application/json'}),...(state.user?{'X-CSRF-Token':state.user.csrf}:{}),...options.headers};
@@ -111,13 +111,37 @@ async function templates(){
 async function templatePlan(){await TemplateFlow.preview([...state.selected]);}
 
 async function batches(){await NkUI.refreshStatus();const data=await api('/api/imports');$('#main').innerHTML=heading('Партии и операции НК','Фактические результаты и подтверждения внешних операций')+NkUI.jobsHtml(state.nkStatus)+`<div class="stack">${data.map(p=>`<section class="section"><h2>${esc(p.filename)}</h2><p class="muted">${esc(p.created)} · ${esc(p.actor)}</p><p>${JSON.parse(p.results).filter(r=>['created','updated'].includes(r.status)).length} строк сохранено</p><button data-result="${p.id}">Показать результаты</button></section>`).join('')||'<div class="section empty"><b>Импортов пока нет</b>Здесь появятся партии после сохранения настоящих файлов.</div>'}</div>`;NkUI.bindJobs();$$('[data-result]').forEach(b=>b.onclick=()=>showResults('Результаты партии',JSON.parse(data.find(p=>p.id===b.dataset.result).results)));}
-async function admin(){await NkUI.refreshStatus();if(!state.user.admin){state.page='cards';await render();return;}const [health,users,events]=await Promise.all([api('/health'),api('/api/admin/users'),api('/api/admin/audit')]);$('#main').innerHTML=heading('Администрирование','Настоящая серверная сессия администратора')+`<section id="bulk-creation" class="section"></section>`+NkUI.adminHtml(state.nkStatus)+`<section class="section"><h2>НК и версия</h2><div class="notice">Проверьте ключ, выполните синхронизацию и подключите Windows-подписант. Внешние действия требуют отдельного подтверждения.</div><p>Версия ${esc(health.version)} · схема БД ${health.schema}<br>Commit <span class="mono">${esc(health.commit)}</span><br>Assets ${esc(health.assets)} · запуск ${esc(health.started)}</p></section><section class="section"><h2>Сотрудники</h2><p>${users.map(u=>esc(u.username)).join(', ')}</p><div class="actions"><input id="new-user" placeholder="Новый username" maxlength="64"><button id="add-user">Создать сотрудника</button></div></section><section class="section"><h2>Журнал последних действий</h2><div class="content-scroll"><table><tr><th>Время</th><th>Кто</th><th>Действие</th></tr>${events.map(e=>`<tr><td>${esc(e.created)}</td><td>${esc(e.actor)}</td><td>${esc(eventName(e.action))}</td></tr>`).join('')}</table></div></section>`;NkUI.bindAdmin();await BulkCreation.mount();bind('#add-user',async()=>{await api('/api/admin/users',json('POST',{username:$('#new-user').value}));await admin();});}
+async function admin(){await NkUI.refreshStatus();if(!state.user.admin){state.page='cards';await render();return;}const [health,users,events]=await Promise.all([api('/health'),api('/api/admin/users'),api('/api/admin/audit')]);$('#main').innerHTML=heading('Администрирование','Настоящая серверная сессия администратора')+`<section id="bulk-creation" class="section"></section>`+NkUI.adminHtml(state.nkStatus)+`<section class="section"><h2>НК и версия</h2><div class="notice">Проверьте ключ, выполните синхронизацию и подключите Windows-подписант. Внешние действия требуют отдельного подтверждения.</div><p>Версия ${esc(health.version)} · схема БД ${health.schema}<br>Commit <span class="mono">${esc(health.commit)}</span><br>Assets ${esc(health.assets)} · запуск ${esc(health.started)}</p></section>${AccountsUI.html(users)}<section class="section"><h2>Журнал последних действий</h2><div class="content-scroll"><table><tr><th>Время</th><th>Кто</th><th>Действие</th></tr>${events.map(e=>`<tr><td>${esc(e.created)}</td><td>${esc(e.actor)}</td><td>${esc(eventName(e.action))}</td></tr>`).join('')}</table></div></section>`;NkUI.bindAdmin();AccountsUI.bind();await BulkCreation.mount();}
 function unavailable(){return NkUI.actions([...state.selected]);}
 function help(){modal('Как работать с черновиками','<ol class="workflow-help"><li><b>Заполнить.</b> Откройте «Черновики» и нажмите «Заполнить автоматически». В оставшихся карточках укажите PN, ТН ВЭД, товарный знак и выберите вид товара. Сохраните.</li><li><b>Отправить.</b> Выберите готовые карточки и нажмите «Отправить на модерацию». Программа сохранит данные в НК и после подтверждения сама запустит модерацию.</li><li><b>Модерация.</b> Дождитесь результата НК. Ошибка, если она есть, появится у карточки.</li><li><b>Подписать.</b> Запустите Windows-подписант и нажмите «Подписать и опубликовать». Опубликованные товары появятся в разделе «Карточки».</li></ol><p>Черновики с уже опубликованным PN скрыты по умолчанию; их можно показать переключателем. Статусы обновляются автоматически. Подробности операций доступны в «Партиях».</p>');}
 $('#help-button').onclick=help;
-$('#login-form').onsubmit=async event=>{event.preventDefault();try{state.user=await api('/api/login',json('POST',{username:$('#login-username').value.trim(),admin_password:$('#login-password').value}));$('#login-password').value='';await start();}catch(error){$('#login-error').textContent=error.message;}};
+$('#login-form').onsubmit=async event=>{
+ event.preventDefault();$('#login-error').textContent='';
+ try{
+  const username=$('#login-username').value.trim(),password=$('#login-password').value;
+  const result=await api('/api/login',json('POST',{username,password}));
+  $('#login-password').value='';
+  if(result.setup_required){
+   pendingSetup={username,code:password};
+   $('#login-screen').hidden=true;$('#setup-screen').hidden=false;
+   $('#setup-password').focus();return;
+  }
+  state.user=result;await start();
+ }catch(error){$('#login-error').textContent=error.message;}
+};
+$('#setup-form').onsubmit=async event=>{
+ event.preventDefault();$('#setup-error').textContent='';
+ const password=$('#setup-password').value,confirmation=$('#setup-password-confirm').value;
+ if(password!==confirmation){$('#setup-error').textContent='Пароли не совпадают';return;}
+ if(password.length<8){$('#setup-error').textContent='Минимум 8 символов';return;}
+ try{
+  state.user=await api('/api/activate',json('POST',{username:pendingSetup.username,setup_code:pendingSetup.code,password,password_confirmation:confirmation}));
+  pendingSetup=null;$('#setup-form').reset();await start();
+ }catch(error){$('#setup-error').textContent=error.message;}
+};
+$('#setup-cancel').onclick=()=>{pendingSetup=null;$('#setup-form').reset();$('#setup-error').textContent='';$('#setup-screen').hidden=true;$('#login-screen').hidden=false;};
 $('#logout').onclick=async()=>{if(!leave())return;try{await api('/api/logout',json('POST',{}));location.reload();}catch(e){toast(e.message);}};
-async function start(){await reloadCards();await NkUI.refreshStatus();$('#login-screen').hidden=true;$('#shell').hidden=false;$('#user-label').textContent=state.user.username+(state.user.admin?' · администратор':' · сотрудник');const page=location.hash.slice(1);state.page=labels[page]&&(page!=='admin'||state.user.admin)?page:'cards';await render();}
+async function start(){$('#login-screen').hidden=true;$('#setup-screen').hidden=true;await reloadCards();await NkUI.refreshStatus();$('#login-screen').hidden=true;$('#shell').hidden=false;$('#user-label').textContent=state.user.username+(state.user.admin?' · администратор':' · сотрудник');const page=location.hash.slice(1);state.page=labels[page]&&(page!=='admin'||state.user.admin)?page:'cards';await render();}
 window.addEventListener('hashchange',async()=>{if(!state.user)return;if(!leave()){history.replaceState(null,'','#'+state.page);return;}state.dirty=false;state.drawer=null;$('#drawer').hidden=true;state.page=labels[location.hash.slice(1)]?location.hash.slice(1):'cards';state.pageNo=1;await render();});
 window.addEventListener('beforeunload',event=>{if(state.dirty){event.preventDefault();event.returnValue='';}});
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&state.drawer&&!$('#dialog').open&&leave()){state.drawer=null;state.dirty=false;$('#drawer').hidden=true;}});

@@ -28,9 +28,9 @@ async function main(){
  const visible=selector=>page.locator(selector).waitFor({state:'visible'});
  const shot=async name=>{await page.screenshot({path:path.join(shots,name+'.png')});report.screenshots.push(name+'.png');};
  await page.goto(origin);await visible('#login-screen');
- await page.locator('#login-username').fill('tester');await page.locator('#login-form button[type="submit"]').click();await visible('.registry');
+ await page.locator('#login-username').fill('tester');await page.locator('#login-password').fill('isolated-test-admin-password');await page.locator('#login-form button[type="submit"]').click();await visible('.registry');
  assert.equal(await page.locator('#rows tbody tr').count(),0);assert((await page.locator('.empty').innerText()).includes('Каталог пуст'));
- assert.equal(await page.locator('nav a[href="#admin"]').count(),0);check('Login, empty real database and employee navigation');
+ assert.equal(await page.locator('nav a[href="#admin"]').count(),1);check('Password-protected login and empty real database');
  await page.locator('#create').click();await visible('#creation-pn');
  await page.locator('#creation-pn').fill('BROWSER-ALPHA');await page.locator('#creation-tnved').fill('8536901000');await page.locator('#creation-brand').fill('Hsuan Mao');
  const dictionary=(await(await page.request.get(origin+'/api/creation/catalog')).json()).kinds;
@@ -65,7 +65,16 @@ async function main(){
  await page.locator('nav a[href="#templates"]').click();await visible('#export-catalog');const downloadPromise=page.waitForEvent('download');await page.locator('#export-catalog').click();const downloaded=await downloadPromise;const zip=path.join(dir,'analysis.zip');await downloaded.saveAs(zip);
  const inspect=spawnSync(python,['-c',"from zipfile import ZipFile; import json,sys; z=ZipFile(sys.argv[1]); j=json.loads(z.read('catalog.json')); assert len(j['cards'])==2; assert any(c['attributes'].get('Страна')=='Китай' for c in j['cards']); assert 'summary.xlsx' in z.namelist()",zip],{encoding:'utf8'});assert.equal(inspect.status,0,inspect.stderr);check('Download analysis ZIP containing actual saved cards and XLSX');
  await page.locator('nav a[href="#batches"]').click();await visible('[data-result]');await page.locator('[data-result]').click();await visible('#dialog[open]');await page.locator('#dialog [data-close]').first().click();
- await page.locator('#logout').click();await visible('#login-screen');await page.locator('#login-username').fill('tester');await page.locator('#login-password').fill('isolated-test-admin-password');await page.locator('#login-form button[type="submit"]').click();await visible('nav a[href="#admin"]');await page.locator('nav a[href="#admin"]').click();await visible('#new-user');await shot('live-admin');check('Real batch results, logout and separate admin password');
+ await page.locator('#logout').click();await visible('#login-screen');await page.locator('#login-username').fill('tester');await page.locator('#login-password').fill('isolated-test-admin-password');await page.locator('#login-form button[type="submit"]').click();await visible('nav a[href="#admin"]');await page.locator('nav a[href="#admin"]').click();await visible('#new-user');await shot('live-admin');check('Real batch results, logout and admin password');
+ await page.locator('#new-user').fill('onboarding');await page.locator('#add-user').click();await visible('#user-setup-code');
+ const code=await page.locator('#user-setup-code').inputValue();
+ assert(code.length>16);await page.locator('#dialog [data-close]').first().click();
+ await page.locator('#logout').click();await visible('#login-screen');
+ await page.locator('#login-username').fill('onboarding');await page.locator('#login-password').fill(code);await page.locator('#login-form button[type="submit"]').click();await visible('#setup-screen');
+ await page.locator('#setup-password').fill('password-of-choice');await page.locator('#setup-password-confirm').fill('password-of-choice');
+ await page.locator('#setup-form button[type="submit"]').click();await visible('.registry');
+ assert.equal(await page.locator('nav a[href="#admin"]').count(),0);
+ check('Administrator onboarding code, mandatory password confirmation, employee permissions');
  for(const width of [1366,1100,900]){await page.setViewportSize({width,height:768});assert(await page.evaluate(()=>{const side=document.querySelector('.sidebar').getBoundingClientRect();return [...document.querySelectorAll('.sidebar nav a')].every(a=>a.getBoundingClientRect().right<=side.right+1&&a.scrollWidth<=a.clientWidth+1);}),'Admin navigation must fit inside sidebar at '+width);}
  await page.setViewportSize({width:1366,height:768});
 
