@@ -31,7 +31,7 @@ def password_hash(password):
 def verify_password(password, value):
     try:
         raw = base64.b64decode(value, validate=True)
-        return len(raw) == 48 and hmac.compare_digest(raw[16:], hashlib.scrypt(password.encode(), salt=raw[:16], n=16384, r=8, p=1))
+        return len(raw) == 80 and hmac.compare_digest(raw[16:], hashlib.scrypt(password.encode(), salt=raw[:16], n=16384, r=8, p=1))
     except (ValueError, TypeError):
         return False
 
