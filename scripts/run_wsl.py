@@ -25,7 +25,7 @@ def main():
         except OSError:
             raise SystemExit(f"Порт {args.port} занят. Ничего не остановлено. Повторите с --port {args.port+1}.")
     directory = str(Path(args.data).resolve())
-    if not Store(directory).one("SELECT 1 FROM settings WHERE key='admin_hash'"):
+    if not Store(directory).one("SELECT 1 FROM users WHERE is_admin=1"):
         raise SystemExit("Сначала выполните .venv/bin/python scripts/setup.py (с тем же --data, если меняли путь).")
     os.environ["NK_DATA"] = directory
     os.environ["NK_PUBLIC_URL"] = f"http://localhost:{args.port}"
