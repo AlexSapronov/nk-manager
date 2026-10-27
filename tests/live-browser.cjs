@@ -84,6 +84,20 @@ async function main(){
  await page.locator('#search').fill('');await page.locator('#theme-toggle').click();await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');await shot('live-dark');
  for(const [width,height] of [[1440,900],[1920,1080],[390,844]]){await page.setViewportSize({width,height});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await shot(`live-${width}x${height}`);}
  check('Shared themes and desktop/mobile layouts of the real service');
+ await page.locator('nav a[href="#admin"]').click();await visible('#new-user');
+ await page.locator('#new-user').fill('first-login-user');await page.locator('#add-user').click();await visible('#temporary-code');
+ const enrollmentCode=await page.locator('#temporary-code').inputValue();
+ assert(enrollmentCode.length>=8);await page.locator('#dialog [data-close]').first().click();
+ await page.locator('#logout').click();await visible('#login-screen');
+ await page.locator('#login-username').fill('first-login-user');
+ await page.locator('#login-password').fill(enrollmentCode);
+ await page.locator('#login-submit').click();await visible('#password-setup');
+ await page.locator('#new-password').fill('simplepass8');await page.locator('#repeat-password').fill('does-not-match');
+ await page.locator('#login-submit').click();
+ await page.locator('#login-error').getByText('Пароли не совпадают').waitFor();
+ await page.locator('#repeat-password').fill('simplepass8');await page.locator('#login-submit').click();
+ await visible('.registry');assert.equal(await page.locator('nav a[href="#admin"]').count(),0);
+ check('Admin created user; temporary code requires matching 8-character password and opens employee workspace');
  assert.deepEqual(report.errors,[]);report.status='passed';report.browser=browser.version();
 }
 main().catch(error=>{report.status='failed';report.failure=error.stack;report.serverLogs=logs.slice(-4000);process.exitCode=1;console.error(error);}).finally(async()=>{if(browser)await browser.close();if(child)child.kill('SIGTERM');fs.mkdirSync(shots,{recursive:true});fs.writeFileSync(path.join(root,'docs/live-browser-report.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));fs.rmSync(dir,{recursive:true,force:true});});
