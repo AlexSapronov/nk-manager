@@ -9,6 +9,7 @@ from openpyxl import Workbook, load_workbook
 import pytest
 
 from main import create_app
+from nk_manager.store import password_hash
 from scripts.backup import backup
 
 
@@ -39,12 +40,15 @@ def workbook(rows=None, extra=None):
 def app(tmp_path, monkeypatch):
     monkeypatch.setenv("NK_PUBLIC_URL", ORIGIN)
     app = create_app(tmp_path / "db")
-    app.state.store.setup("alexander", "correct-admin-password")
+    app.state.store.setup("root", "correct-admin-password")
+    with app.state.store.transaction() as db:
+        db.execute("INSERT INTO users(username,password_hash) VALUES(?,?)",
+                   ("alexander", password_hash("employee-password")))
     return app
 
 
 def login(client, admin=False):
-    response = client.post("/api/login", json={"username": "alexander", "admin_password": "correct-admin-password" if admin else ""}, headers={"Origin": ORIGIN})
+    response = client.post("/api/login", json={"username": "root" if admin else "alexander", "password": "correct-admin-password" if admin else "employee-password"}, headers={"Origin": ORIGIN})
     assert response.status_code == 200, response.text
     return {"Origin": ORIGIN, "X-CSRF-Token": response.json()["csrf"]}
 
@@ -86,14 +90,14 @@ def test_auth_csrf_origin_and_admin(app):
         assert client.post("/api/nk/publish", json={}, headers=headers).status_code == 503
         headers = login(client, admin=True)
         assert client.post("/api/admin/users", json={"username": "colleague"}, headers=headers).status_code == 200
-        assert len(client.get("/api/admin/users").json()) == 2
+        assert len(client.get("/api/admin/users").json()) == 3
 
 
 def test_failed_login_attempts_commit(app):
     with TestClient(app, base_url=ORIGIN) as client:
         for _ in range(8):
-            assert client.post("/api/login", json={"username": "alexander", "admin_password": "wrong"}, headers={"Origin": ORIGIN}).status_code == 401
-        assert client.post("/api/login", json={"username": "alexander"}, headers={"Origin": ORIGIN}).status_code == 429
+            assert client.post("/api/login", json={"username": "alexander", "password": "wrong"}, headers={"Origin": ORIGIN}).status_code == 401
+        assert client.post("/api/login", json={"username": "alexander", "password": "employee-password"}, headers={"Origin": ORIGIN}).status_code == 429
 
 
 def test_real_xlsx_import_idempotence_and_no_synthetic_nk_id(app):
