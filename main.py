@@ -61,6 +61,9 @@ def create_app(data_directory=None):
     if public.hostname in ("localhost", "127.0.0.1"):
         port = public.port or (443 if public.scheme == "https" else 80)
         origins |= {f"{public.scheme}://localhost:{port}", f"{public.scheme}://127.0.0.1:{port}"}
+    # For a Windows signer connected through an SSH tunnel, allow loopback Host
+    # only on its Bearer-authenticated API. All UI endpoints retain strict Host checks.
+    allow_signer_tunnel = os.environ.get("NK_SIGNER_ALLOW_LOOPBACK_HOST", "0") == "1"
     cookie_name = "nk_session"
     session_lifetime = 14 * 24 * 3600
     refresh_window = 7 * 24 * 3600
@@ -96,7 +99,12 @@ def create_app(data_directory=None):
 
     @app.middleware("http")
     async def security(request, call_next):
-        if request.url.hostname not in {urlsplit(origin).hostname for origin in origins}:
+        signer_loopback_host = (
+            allow_signer_tunnel
+            and request.url.path.startswith("/api/signer/")
+            and request.url.hostname in {"localhost", "127.0.0.1"}
+        )
+        if request.url.hostname not in {urlsplit(origin).hostname for origin in origins} and not signer_loopback_host:
             return JSONResponse({"detail": "Недопустимый Host"}, status_code=400)
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("origin")
