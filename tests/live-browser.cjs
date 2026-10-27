@@ -17,7 +17,7 @@ async function main(){
  const listener=createServer();await new Promise(r=>listener.listen(0,'127.0.0.1',r));const port=listener.address().port;await new Promise(r=>listener.close(r));
  const origin=`http://127.0.0.1:${port}`;
  const environment={...process.env,NK_DATA:path.join(dir,'data')};
- const setup=spawnSync(python,['-c',"import os; from nk_manager.store import Store; Store(os.environ['NK_DATA']).setup('tester','isolated-test-admin-password')"],{cwd:root,env:environment,encoding:'utf8'});
+ const setup=spawnSync(python,['-c',"import os; from nk_manager.store import Store, password_hash; s=Store(os.environ['NK_DATA']); s.setup('tester','isolated-test-admin-password'); db=s.connect(); db.execute('INSERT INTO users(username,password_hash) VALUES(?,?)',('employee',password_hash('employee-password'))); db.commit(); db.close()"],{cwd:root,env:environment,encoding:'utf8'});
  assert.equal(setup.status,0,setup.stderr);
  child=spawn(python,['scripts/run_wsl.py','--port',String(port)],{cwd:root,env:environment,stdio:['ignore','pipe','pipe']});
  child.stderr.on('data',d=>logs+=d.toString());
@@ -28,7 +28,7 @@ async function main(){
  const visible=selector=>page.locator(selector).waitFor({state:'visible'});
  const shot=async name=>{await page.screenshot({path:path.join(shots,name+'.png')});report.screenshots.push(name+'.png');};
  await page.goto(origin);await visible('#login-screen');
- await page.locator('#login-username').fill('tester');await page.locator('#login-form button[type="submit"]').click();await visible('.registry');
+ await page.locator('#login-username').fill('employee');await page.locator('#login-password').fill('employee-password');await page.locator('#login-form button[type="submit"]').click();await visible('.registry');
  assert.equal(await page.locator('#rows tbody tr').count(),0);assert((await page.locator('.empty').innerText()).includes('Каталог пуст'));
  assert.equal(await page.locator('nav a[href="#admin"]').count(),0);check('Login, empty real database and employee navigation');
  await page.locator('#create').click();await visible('#creation-pn');
