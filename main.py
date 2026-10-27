@@ -121,16 +121,27 @@ def create_app(data_directory=None):
 
     def session(request: Request):
         token = request.cookies.get(cookie_name, "")
-        saved = store.one("SELECT * FROM sessions WHERE token_hash=? AND expires>?", (hashlib.sha256(token.encode()).hexdigest(), time.time()))
-        if not saved or not store.one("SELECT username FROM users WHERE username=? AND enabled=1", (saved["username"],)):
+        if not token:
+            raise HTTPException(401, "Войдите в приложение")
+        saved = store.one("""SELECT s.*, u.is_admin FROM sessions s
+                             JOIN users u ON u.username=s.username
+                             WHERE s.token_hash=? AND s.expires>?
+                               AND u.enabled=1 AND u.password_hash IS NOT NULL""",
+                          (hashlib.sha256(token.encode()).hexdigest(), time.time()))
+        if not saved:
             raise HTTPException(401, "Войдите в приложение")
         if request.method not in ("GET", "HEAD") and not secrets.compare_digest(request.headers.get("x-csrf-token", ""), saved["csrf"]):
             raise HTTPException(403, "Сессия изменилась; обновите страницу")
+        if saved["expires"] < time.time() + refresh_window:
+            with store.transaction() as db:
+                db.execute("UPDATE sessions SET expires=? WHERE token_hash=? AND expires>?",
+                           (time.time() + session_lifetime, saved["token_hash"], time.time()))
+            request.state.renew_session = True
         return saved
 
     def admin(user=Depends(session)):
-        if not user["admin"]:
-            raise HTTPException(403, "Нужна отдельная административная сессия")
+        if not user["is_admin"]:
+            raise HTTPException(403, "Недостаточно прав администратора")
         return user
 
     @app.get("/health")
@@ -146,41 +157,87 @@ def create_app(data_directory=None):
     @app.post("/api/login")
     async def login(request: Request):
         data = await request.json()
-        if not isinstance(data, dict) or not isinstance(data.get("username", ""), str) or not isinstance(data.get("admin_password", ""), str):
+        if not isinstance(data, dict) or not isinstance(data.get("username"), str) or not isinstance(data.get("password"), str):
             raise ValueError("Некорректные данные входа")
-        username, password = data.get("username", ""), data.get("admin_password", "")
-        address = request.client.host
+        username, password = data["username"].strip(), data["password"]
+        address = request.client.host if request.client else "unknown"
         with store.transaction() as db:
             attempt = db.execute("SELECT * FROM login_attempts WHERE ip=?", (address,)).fetchone()
             if attempt and attempt["until"] > time.time():
                 raise HTTPException(429, "Много попыток входа. Повторите через 5 минут")
-            account = db.execute("SELECT 1 FROM users WHERE username=? AND enabled=1", (username,)).fetchone()
-            setting = db.execute("SELECT value FROM settings WHERE key='admin_hash'").fetchone()
-            ok = bool(account and setting and (not password or verify_password(password, setting["value"])))
-            if not ok:
+            account = db.execute("SELECT * FROM users WHERE username=? AND enabled=1", (username,)).fetchone()
+            enrolled = bool(account and account["enrollment_hash"] and password and
+                            verify_password(password, account["enrollment_hash"]))
+            valid = bool(account and account["password_hash"] and password and
+                         verify_password(password, account["password_hash"]))
+            if not valid and not enrolled:
                 failures = (attempt["failures"] if attempt and attempt["until"] > time.time()-300 else 0) + 1
-                db.execute("INSERT OR REPLACE INTO login_attempts VALUES(?,?,?)", (address, failures, time.time()+300 if failures >= 8 else time.time()))
-                # Return here instead of raising: the failed-attempt transaction must commit.
-                return JSONResponse({"detail": "Неверный username или пароль администратора. Для первого запуска выполните setup.py"}, status_code=401)
-            token, csrf = secrets.token_urlsafe(40), secrets.token_urlsafe(32)
-            db.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
-            db.execute("INSERT INTO sessions VALUES(?,?,?,?,?)", (hashlib.sha256(token.encode()).hexdigest(), username, int(bool(password)), csrf, time.time()+8*3600))
+                db.execute("INSERT OR REPLACE INTO login_attempts VALUES(?,?,?)",
+                           (address, failures, time.time()+300 if failures >= 8 else time.time()))
+                return JSONResponse({"detail": "Неверный логин, пароль или одноразовый код"}, status_code=401)
             db.execute("DELETE FROM login_attempts WHERE ip=?", (address,))
-            audit(db, username, "login", "session", {"admin": bool(password)})
-        response = JSONResponse({"username": username, "admin": bool(password), "csrf": csrf})
-        response.set_cookie(cookie_name, token, httponly=True, secure=public.scheme == "https", samesite="strict", max_age=8*3600, path="/")
+            if enrolled:
+                return {"password_setup_required": True, "username": username}
+            token, csrf = issue_session(db, username, account["is_admin"])
+        response = JSONResponse({"username": username, "admin": bool(account["is_admin"]), "csrf": csrf})
+        set_session_cookie(response, token)
         return response
+
+    @app.post("/api/password/activate")
+    async def activate_password(request: Request):
+        data = await request.json()
+        if not isinstance(data, dict) or not isinstance(data.get("username"), str) or not isinstance(data.get("code"), str):
+            raise ValueError("Некорректные данные активации")
+        new_password = password_from_form(data)
+        username, code = data["username"].strip(), data["code"]
+        address = request.client.host if request.client else "unknown"
+        with store.transaction() as db:
+            attempt = db.execute("SELECT * FROM login_attempts WHERE ip=?", (address,)).fetchone()
+            if attempt and attempt["until"] > time.time():
+                raise HTTPException(429, "Много попыток входа. Повторите через 5 минут")
+            account = db.execute("SELECT * FROM users WHERE username=? AND enabled=1", (username,)).fetchone()
+            if not account or not account["enrollment_hash"] or not code or not verify_password(code, account["enrollment_hash"]):
+                failures = (attempt["failures"] if attempt and attempt["until"] > time.time()-300 else 0) + 1
+                db.execute("INSERT OR REPLACE INTO login_attempts VALUES(?,?,?)",
+                           (address, failures, time.time()+300 if failures >= 8 else time.time()))
+                return JSONResponse({"detail": "Неверный или уже использованный одноразовый код"}, status_code=401)
+            db.execute("UPDATE users SET password_hash=?, enrollment_hash=NULL WHERE username=?",
+                       (password_hash(new_password), username))
+            db.execute("DELETE FROM sessions WHERE username=?", (username,))
+            db.execute("DELETE FROM login_attempts WHERE ip=?", (address,))
+            audit(db, username, "password_set", username, {"first_login": True})
+            token, csrf = issue_session(db, username, account["is_admin"])
+        response = JSONResponse({"username": username, "admin": bool(account["is_admin"]), "csrf": csrf})
+        set_session_cookie(response, token)
+        return response
+
+    @app.post("/api/password/change")
+    def change_password(data: dict, user=Depends(session)):
+        old = data.get("current_password")
+        if not isinstance(old, str):
+            raise ValueError("Укажите действующий пароль")
+        new_password = password_from_form(data)
+        with store.transaction() as db:
+            account = db.execute("SELECT password_hash FROM users WHERE username=?", (user["username"],)).fetchone()
+            if not account or not verify_password(old, account["password_hash"]):
+                raise HTTPException(403, "Неверный действующий пароль")
+            db.execute("UPDATE users SET password_hash=?, enrollment_hash=NULL WHERE username=?",
+                       (password_hash(new_password), user["username"]))
+            db.execute("DELETE FROM sessions WHERE username=? AND token_hash!=?",
+                       (user["username"], user["token_hash"]))
+            audit(db, user["username"], "password_changed", user["username"], {})
+        return {"ok": True}
 
     @app.get("/api/me")
     def me(user=Depends(session)):
-        return {"username": user["username"], "admin": bool(user["admin"]), "csrf": user["csrf"]}
+        return {"username": user["username"], "admin": bool(user["is_admin"]), "csrf": user["csrf"]}
 
     @app.post("/api/logout")
     def logout(user=Depends(session)):
         with store.transaction() as db:
             db.execute("DELETE FROM sessions WHERE token_hash=?", (user["token_hash"],))
         response = JSONResponse({"ok": True})
-        response.delete_cookie(cookie_name)
+        response.delete_cookie(cookie_name, path="/", samesite="lax", secure=public.scheme == "https")
         return response
 
     @app.get("/api/cards")
@@ -197,15 +254,15 @@ def create_app(data_directory=None):
 
     @app.put("/api/cards/{id}")
     def update(id: str, data: dict, user=Depends(session)):
-        return service.save(user["username"], data, id, bool(user["admin"]))
+        return service.save(user["username"], data, id, bool(user["is_admin"]))
 
     @app.post("/api/cards/{id}/claim")
     def claim(id: str, data: dict, user=Depends(session)):
-        return service.claim(user["username"], id, data.get("revision"), bool(user["admin"]), bool(data.get("release")))
+        return service.claim(user["username"], id, data.get("revision"), bool(user["is_admin"]), bool(data.get("release")))
 
     @app.post("/api/cards/{id}/archive")
     def archive(id: str, data: dict, user=Depends(session)):
-        return service.archive(user["username"], id, data.get("revision"), str(data.get("reason", "")), bool(data.get("restore")), bool(user["admin"]))
+        return service.archive(user["username"], id, data.get("revision"), str(data.get("reason", "")), bool(data.get("restore")), bool(user["is_admin"]))
 
     @app.get("/api/cards/{id}/history")
     def history(id: str, user=Depends(session)):
@@ -410,7 +467,7 @@ def create_app(data_directory=None):
     def nk_prepare(kind: str, data: dict, user=Depends(session)):
         if data.get("confirmed") is not True:
             raise ValueError("Нужно явное подтверждение внешнего действия")
-        return {"id":nk.prepare(user["username"],kind,str(data.get("id","")),data.get("revision"),data.get("options") or {},bool(user["admin"]))}
+        return {"id":nk.prepare(user["username"],kind,str(data.get("id","")),data.get("revision"),data.get("options") or {},bool(user["is_admin"]))}
 
     @app.get("/api/nk/job/{id}")
     def nk_job(id: str, user=Depends(session)):
@@ -437,7 +494,7 @@ def create_app(data_directory=None):
     @app.post("/api/nk/card/{id}/category")
     def nk_card_category(id: str,data: dict,user=Depends(session)):
         card=service.get(id)
-        if card["revision"]!=data.get("revision") or card["owner"] not in ("",user["username"]) and not user["admin"]:
+        if card["revision"]!=data.get("revision") or card["owner"] not in ("",user["username"]) and not user["is_admin"]:
             raise Conflict("Ревизия/ответственность изменились")
         cat_id=str(data.get("cat_id",""))
         if not cat_id.isdigit() or not store.one("SELECT cat_id FROM nk_schemas WHERE cat_id=?",(cat_id,)):
@@ -453,7 +510,7 @@ def create_app(data_directory=None):
             raise ValueError("Подтвердите замену локальных полей актуальными данными НК")
         with nk.lock:
             card=service.get(id)
-            if card["revision"]!=data.get("revision") or card["owner"] not in ("",user["username"]) and not user["admin"]:
+            if card["revision"]!=data.get("revision") or card["owner"] not in ("",user["username"]) and not user["is_admin"]:
                 raise Conflict("Ревизия или ответственный изменились")
             if store.one("SELECT id FROM nk_jobs WHERE card_id=? AND state NOT IN ('failed','confirmed','cancelled')",(id,)):
                 raise Conflict("Сначала завершите или сверьте операцию НК")
