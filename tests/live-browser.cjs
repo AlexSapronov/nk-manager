@@ -75,6 +75,9 @@ async function main(){
  await page.locator('#setup-form button[type="submit"]').click();await visible('.registry');
  assert.equal(await page.locator('nav a[href="#admin"]').count(),0);
  check('Administrator onboarding code, mandatory password confirmation, employee permissions');
+ await page.locator('#logout').click();await visible('#login-screen');
+ await page.locator('#login-username').fill('tester');await page.locator('#login-password').fill('isolated-test-admin-password');
+ await page.locator('#login-form button[type="submit"]').click();await visible('nav a[href="#admin"]');
  for(const width of [1366,1100,900]){await page.setViewportSize({width,height:768});assert(await page.evaluate(()=>{const side=document.querySelector('.sidebar').getBoundingClientRect();return [...document.querySelectorAll('.sidebar nav a')].every(a=>a.getBoundingClientRect().right<=side.right+1&&a.scrollWidth<=a.clientWidth+1);}),'Admin navigation must fit inside sidebar at '+width);}
  await page.setViewportSize({width:1366,height:768});
 
