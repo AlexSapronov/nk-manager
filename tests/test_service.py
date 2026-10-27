@@ -9,6 +9,7 @@ from openpyxl import Workbook, load_workbook
 import pytest
 
 from main import create_app
+from nk_manager.store import Store, password_hash
 from scripts.backup import backup
 
 
@@ -40,11 +41,13 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setenv("NK_PUBLIC_URL", ORIGIN)
     app = create_app(tmp_path / "db")
     app.state.store.setup("alexander", "correct-admin-password")
+    with app.state.store.transaction() as db:
+        db.execute("INSERT INTO users(username,password_hash) VALUES(?,?)", ("employee",password_hash("employee-password")))
     return app
 
 
 def login(client, admin=False):
-    response = client.post("/api/login", json={"username": "alexander", "admin_password": "correct-admin-password" if admin else ""}, headers={"Origin": ORIGIN})
+    response = client.post("/api/login", json={"username": "alexander" if admin else "employee", "password": "correct-admin-password" if admin else "employee-password"}, headers={"Origin": ORIGIN})
     assert response.status_code == 200, response.text
     return {"Origin": ORIGIN, "X-CSRF-Token": response.json()["csrf"]}
 
@@ -92,8 +95,8 @@ def test_auth_csrf_origin_and_admin(app):
 def test_failed_login_attempts_commit(app):
     with TestClient(app, base_url=ORIGIN) as client:
         for _ in range(8):
-            assert client.post("/api/login", json={"username": "alexander", "admin_password": "wrong"}, headers={"Origin": ORIGIN}).status_code == 401
-        assert client.post("/api/login", json={"username": "alexander"}, headers={"Origin": ORIGIN}).status_code == 429
+            assert client.post("/api/login", json={"username": "alexander", "password": "wrong"}, headers={"Origin": ORIGIN}).status_code == 401
+        assert client.post("/api/login", json={"username": "alexander", "password": "correct-admin-password"}, headers={"Origin": ORIGIN}).status_code == 429
 
 
 def test_real_xlsx_import_idempotence_and_no_synthetic_nk_id(app):
@@ -275,3 +278,63 @@ def test_external_id_is_preserved_when_clean_snapshot_is_updated(app):
         assert after["external_id"] == "real-id-from-source"
         assert after["id"] == before["id"]
         assert len(client.get("/api/cards").json()) == 1
+
+def test_first_login_activation_reset_and_individual_permissions(app):
+    with TestClient(app, base_url=ORIGIN) as admin_client:
+        admin_headers = login(admin_client, admin=True)
+        created = admin_client.post("/api/admin/users", json={"username": "new_employee"}, headers=admin_headers)
+        assert created.status_code == 200, created.text
+        code = created.json()["setup_code"]
+        assert len(code) > 16
+        assert code not in str(app.state.store.all("SELECT * FROM users"))
+        with TestClient(app, base_url=ORIGIN) as staff:
+            assert staff.post("/api/login", json={"username": "new_employee", "password": ""}, headers={"Origin": ORIGIN}).status_code == 401
+            first = staff.post("/api/login", json={"username": "new_employee", "password": code}, headers={"Origin": ORIGIN})
+            assert first.json() == {"setup_required": True, "username": "new_employee"}
+            assert "nk_session" not in staff.cookies
+            activation = {"username": "new_employee", "setup_code": code, "password": "abcdefgh",
+                          "password_confirmation": "abcdefgh"}
+            assert staff.post("/api/activate", json={**activation,"password_confirmation":"different"}, headers={"Origin": ORIGIN}).status_code == 422
+            assert staff.post("/api/activate", json={**activation,"password":"short","password_confirmation":"short"}, headers={"Origin": ORIGIN}).status_code == 422
+            enabled = staff.post("/api/activate", json=activation, headers={"Origin": ORIGIN})
+            assert enabled.status_code == 200, enabled.text
+            assert staff.get("/api/me").json()["admin"] is False
+            assert staff.get("/api/admin/users").status_code == 403
+            assert staff.post("/api/login", json={"username": "new_employee", "password": code}, headers={"Origin": ORIGIN}).status_code == 401
+            reset = admin_client.post("/api/admin/users/new_employee/reset-password", headers=admin_headers, json={})
+            assert reset.status_code == 200, reset.text
+            assert staff.get("/api/me").status_code == 401
+            assert staff.post("/api/login", json={"username": "new_employee", "password": "abcdefgh"}, headers={"Origin": ORIGIN}).status_code == 401
+            new_code = reset.json()["setup_code"]
+            assert new_code != code
+            assert staff.post("/api/login", json={"username": "new_employee", "password": new_code}, headers={"Origin": ORIGIN}).json()["setup_required"]
+            assert staff.post("/api/activate", json={**activation,"setup_code":new_code}, headers={"Origin": ORIGIN}).status_code == 200
+
+
+def test_session_renewal_and_migration(tmp_path, monkeypatch):
+    monkeypatch.setenv("NK_PUBLIC_URL", ORIGIN)
+    old = tmp_path / "legacy"
+    db = Store(old)
+    db.setup("root", "original-admin-password")
+    with db.transaction() as con:
+        con.execute("UPDATE users SET password_hash=NULL,is_admin=0 WHERE username='root'")
+        con.execute("INSERT OR REPLACE INTO settings VALUES('admin_hash',?)", (password_hash("original-admin-password"),))
+        con.execute("INSERT INTO users(username) VALUES('unactivated')")
+        con.execute("UPDATE settings SET value='1' WHERE key='schema_version'")
+        con.execute("UPDATE sessions SET created=0")
+    app = create_app(old)
+    assert app.state.store.one("SELECT is_admin FROM users WHERE username='root'")["is_admin"] == 1
+    assert not app.state.store.one("SELECT 1 FROM settings WHERE key='admin_hash'")
+    assert app.state.store.one("SELECT value FROM settings WHERE key='schema_version'")["value"] == "2"
+    with TestClient(app, base_url=ORIGIN) as client:
+        r = client.post("/api/login", json={"username":"root","password":"original-admin-password"}, headers={"Origin": ORIGIN})
+        assert r.status_code == 200
+        token = client.cookies.get("nk_session")
+        with app.state.store.transaction() as con:
+            con.execute("UPDATE sessions SET expires=? WHERE username='root'", (__import__('time').time()+10,))
+        assert client.get("/api/me").status_code == 200
+        assert client.cookies.get("nk_session") == token
+        expiry = app.state.store.one("SELECT expires FROM sessions WHERE username='root'")["expires"]
+        assert expiry > __import__('time').time() + 6*86400
+        assert client.get("/api/admin/users").status_code == 200
+        assert client.post("/api/login", json={"username":"unactivated","password":""}, headers={"Origin": ORIGIN}).status_code == 401

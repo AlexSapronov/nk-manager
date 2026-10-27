@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -39,8 +40,8 @@ def verify_password(password, value):
 SCHEMA = """
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY,enabled INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,username TEXT NOT NULL,admin INTEGER NOT NULL,csrf TEXT NOT NULL,expires REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY,enabled INTEGER NOT NULL DEFAULT 1,password_hash TEXT,setup_code_hash TEXT,is_admin INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,username TEXT NOT NULL,admin INTEGER NOT NULL,csrf TEXT NOT NULL,expires REAL NOT NULL,created REAL NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS login_attempts(ip TEXT PRIMARY KEY,failures INTEGER NOT NULL,until REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS cards(id TEXT PRIMARY KEY,external_id TEXT UNIQUE,source TEXT NOT NULL,external_status TEXT,
  pn TEXT NOT NULL,gtin TEXT NOT NULL,tnved TEXT NOT NULL,category TEXT NOT NULL,card_type TEXT NOT NULL,name TEXT NOT NULL,
@@ -70,7 +71,23 @@ class Store:
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
-            db.execute("INSERT OR IGNORE INTO settings VALUES('schema_version','1')")
+            # Non-destructive migration for databases created before individual passwords.
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(users)")}
+            for name, definition in (("password_hash", "TEXT"), ("setup_code_hash", "TEXT"),
+                                     ("is_admin", "INTEGER NOT NULL DEFAULT 0")):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE users ADD COLUMN {name} {definition}")
+            if "created" not in {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}:
+                db.execute("ALTER TABLE sessions ADD COLUMN created REAL NOT NULL DEFAULT 0")
+            db.execute("UPDATE sessions SET created=? WHERE created=0", (time.time(),))
+            legacy = db.execute("SELECT value FROM settings WHERE key='admin_hash'").fetchone()
+            if legacy:
+                owner = db.execute("SELECT actor FROM audit WHERE action='setup' ORDER BY id LIMIT 1").fetchone()
+                if owner and db.execute("SELECT 1 FROM users WHERE username=?", (owner["actor"],)).fetchone():
+                    db.execute("UPDATE users SET password_hash=?,is_admin=1,setup_code_hash=NULL WHERE username=?",
+                               (legacy["value"], owner["actor"]))
+                    db.execute("DELETE FROM settings WHERE key='admin_hash'")
+            db.execute("INSERT OR REPLACE INTO settings VALUES('schema_version','2')")
         os.chmod(self.path, 0o600)
 
     def connect(self):
@@ -102,14 +119,13 @@ class Store:
 
     def setup(self, username, password):
         with self.transaction() as db:
-            if db.execute("SELECT 1 FROM settings WHERE key='admin_hash'").fetchone():
+            if db.execute("SELECT 1 FROM users WHERE is_admin=1").fetchone():
                 raise ValueError("Приложение уже настроено; существующий пароль не изменён")
-            if len(password) < 12:
-                raise ValueError("Пароль администратора: минимум 12 символов")
+            if len(password) < 8:
+                raise ValueError("Пароль: минимум 8 символов")
             if not username or len(username) > 64 or not all(c.isalnum() or c in '_-.' for c in username):
                 raise ValueError("Username: буквы, цифры, точка, дефис, подчёркивание")
-            db.execute("INSERT INTO settings VALUES('admin_hash',?)", (password_hash(password),))
-            db.execute("INSERT INTO users(username) VALUES(?)", (username,))
+            db.execute("INSERT INTO users(username,password_hash,is_admin) VALUES(?,?,1)", (username,password_hash(password)))
             audit(db, username, "setup", "organization", {"local_only": True})
 
 

@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from nk_manager import __version__
 from nk_manager.service import Conflict, Service, candidates
-from nk_manager.store import Store, audit, dumps, now, uid, verify_password
+from nk_manager.store import Store, audit, dumps, now, uid, password_hash, verify_password
 from nk_manager.nk import Engine
 
 ROOT = Path(__file__).resolve().parent
@@ -62,6 +62,24 @@ def create_app(data_directory=None):
         port = public.port or (443 if public.scheme == "https" else 80)
         origins |= {f"{public.scheme}://localhost:{port}", f"{public.scheme}://127.0.0.1:{port}"}
     cookie_name = "nk_session"
+    idle_seconds = 7 * 86400
+    lifetime_seconds = 30 * 86400
+    renew_window = 2 * 86400
+
+    def cookie(response, token, ttl):
+        response.set_cookie(cookie_name, token, httponly=True, secure=public.scheme == "https",
+                            samesite="lax", max_age=max(1, int(ttl)), path="/")
+
+    def new_session(db, username):
+        created = time.time()
+        token, csrf = secrets.token_urlsafe(40), secrets.token_urlsafe(32)
+        user = db.execute("SELECT is_admin FROM users WHERE username=?", (username,)).fetchone()
+        db.execute("DELETE FROM sessions WHERE expires<? OR (created>0 AND created+?<?)",
+                   (created, lifetime_seconds, created))
+        db.execute("INSERT INTO sessions(token_hash,username,admin,csrf,expires,created) VALUES(?,?,?,?,?,?)",
+                   (hashlib.sha256(token.encode()).hexdigest(), username, int(user["is_admin"]),
+                    csrf, created+idle_seconds, created))
+        return token, csrf, bool(user["is_admin"])
 
     @app.exception_handler(ValueError)
     async def invalid(request, exc):
@@ -84,6 +102,9 @@ def create_app(data_directory=None):
         elif request.headers.get("content-length", "").isdigit() and int(request.headers["content-length"]) > 3 * 1024 * 1024:
             return JSONResponse({"detail": "Запрос превышает 3 МБ"}, status_code=413)
         response = await call_next(request)
+        renewal = getattr(request.state, "session_renewal", None)
+        if renewal:
+            cookie(response, *renewal)
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
@@ -92,22 +113,36 @@ def create_app(data_directory=None):
 
     def session(request: Request):
         token = request.cookies.get(cookie_name, "")
-        saved = store.one("SELECT * FROM sessions WHERE token_hash=? AND expires>?", (hashlib.sha256(token.encode()).hexdigest(), time.time()))
-        if not saved or not store.one("SELECT username FROM users WHERE username=? AND enabled=1", (saved["username"],)):
+        moment = time.time()
+        saved = store.one(
+            """SELECT s.token_hash,s.username,u.is_admin AS admin,s.csrf,s.expires,s.created
+               FROM sessions s JOIN users u ON u.username=s.username
+               WHERE s.token_hash=? AND s.expires>? AND u.enabled=1 AND u.password_hash IS NOT NULL
+                 AND (s.created=0 OR s.created+?>?)""",
+            (hashlib.sha256(token.encode()).hexdigest(), moment, lifetime_seconds, moment))
+        if not saved:
             raise HTTPException(401, "Войдите в приложение")
-        if request.method not in ("GET", "HEAD") and not secrets.compare_digest(request.headers.get("x-csrf-token", ""), saved["csrf"]):
-            raise HTTPException(403, "Сессия изменилась; обновите страницу")
+        if request.method not in ("GET", "HEAD") and not secrets.compare_digest(
+                request.headers.get("x-csrf-token", ""), saved["csrf"]):
+            raise HTTPException(403, "Проверка CSRF не пройдена")
+        if saved["expires"]-moment < renew_window:
+            expires = min(moment+idle_seconds, saved["created"]+lifetime_seconds)
+            if expires > saved["expires"]:
+                with store.transaction() as db:
+                    db.execute("UPDATE sessions SET expires=? WHERE token_hash=? AND expires>?",
+                               (expires, saved["token_hash"], moment))
+                request.state.session_renewal = (token, expires-moment)
         return saved
 
     def admin(user=Depends(session)):
         if not user["admin"]:
-            raise HTTPException(403, "Нужна отдельная административная сессия")
+            raise HTTPException(403, "Требуются права администратора")
         return user
 
     @app.get("/health")
     def health():
         return {"status": "ok", "version": __version__, "commit": commit, "assets": asset_version, "schema": int(store.one("SELECT value FROM settings WHERE key='schema_version'")["value"]), "started": stamp,
-                "setup_required": not bool(store.one("SELECT 1 FROM settings WHERE key='admin_hash'")), "nk_api_configured": nk.status()["configured"], "external_writes": nk.status()["writes_enabled"]}
+                "setup_required": not bool(store.one("SELECT 1 FROM users WHERE is_admin=1")), "nk_api_configured": nk.status()["configured"], "external_writes": nk.status()["writes_enabled"]}
 
     @app.get("/")
     def index():
@@ -117,29 +152,66 @@ def create_app(data_directory=None):
     @app.post("/api/login")
     async def login(request: Request):
         data = await request.json()
-        if not isinstance(data, dict) or not isinstance(data.get("username", ""), str) or not isinstance(data.get("admin_password", ""), str):
-            raise ValueError("Некорректные данные входа")
-        username, password = data.get("username", ""), data.get("admin_password", "")
+        if not isinstance(data, dict) or not isinstance(data.get("username"), str) or not isinstance(data.get("password"), str):
+            raise ValueError("Введите username и пароль")
+        username, password = data["username"].strip(), data["password"]
         address = request.client.host
         with store.transaction() as db:
+            moment = time.time()
             attempt = db.execute("SELECT * FROM login_attempts WHERE ip=?", (address,)).fetchone()
-            if attempt and attempt["until"] > time.time():
+            if attempt and attempt["until"] > moment:
                 raise HTTPException(429, "Много попыток входа. Повторите через 5 минут")
-            account = db.execute("SELECT 1 FROM users WHERE username=? AND enabled=1", (username,)).fetchone()
-            setting = db.execute("SELECT value FROM settings WHERE key='admin_hash'").fetchone()
-            ok = bool(account and setting and (not password or verify_password(password, setting["value"])))
-            if not ok:
-                failures = (attempt["failures"] if attempt and attempt["until"] > time.time()-300 else 0) + 1
-                db.execute("INSERT OR REPLACE INTO login_attempts VALUES(?,?,?)", (address, failures, time.time()+300 if failures >= 8 else time.time()))
-                # Return here instead of raising: the failed-attempt transaction must commit.
-                return JSONResponse({"detail": "Неверный username или пароль администратора. Для первого запуска выполните setup.py"}, status_code=401)
-            token, csrf = secrets.token_urlsafe(40), secrets.token_urlsafe(32)
-            db.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
-            db.execute("INSERT INTO sessions VALUES(?,?,?,?,?)", (hashlib.sha256(token.encode()).hexdigest(), username, int(bool(password)), csrf, time.time()+8*3600))
+            account = db.execute("SELECT * FROM users WHERE username=? AND enabled=1", (username,)).fetchone()
+            ready = bool(account and account["password_hash"] and verify_password(password, account["password_hash"]))
+            onboarding = bool(account and not account["password_hash"] and account["setup_code_hash"]
+                              and verify_password(password, account["setup_code_hash"]))
+            if not ready and not onboarding:
+                failures = (attempt["failures"] if attempt and attempt["until"] > moment-300 else 0) + 1
+                db.execute("INSERT OR REPLACE INTO login_attempts VALUES(?,?,?)",
+                           (address, failures, moment+300 if failures>=8 else moment))
+                return JSONResponse({"detail": "Неверный username или пароль"}, status_code=401)
             db.execute("DELETE FROM login_attempts WHERE ip=?", (address,))
-            audit(db, username, "login", "session", {"admin": bool(password)})
-        response = JSONResponse({"username": username, "admin": bool(password), "csrf": csrf})
-        response.set_cookie(cookie_name, token, httponly=True, secure=public.scheme == "https", samesite="strict", max_age=8*3600, path="/")
+            if onboarding:
+                return {"setup_required": True, "username": username}
+            token, csrf, is_admin = new_session(db, username)
+            audit(db, username, "login", "session", {"admin": is_admin})
+        response = JSONResponse({"username": username, "admin": is_admin, "csrf": csrf})
+        cookie(response, token, idle_seconds)
+        return response
+
+    @app.post("/api/activate")
+    async def activate(request: Request):
+        data = await request.json()
+        if not isinstance(data, dict):
+            raise ValueError("Некорректные данные")
+        username, code = data.get("username"), data.get("setup_code")
+        password, confirmation = data.get("password"), data.get("password_confirmation")
+        if any(not isinstance(item, str) for item in (username, code, password, confirmation)):
+            raise ValueError("Заполните все поля")
+        if len(password) < 8:
+            raise ValueError("Пароль должен содержать минимум 8 символов")
+        if password != confirmation:
+            raise ValueError("Пароли не совпадают")
+        address = request.client.host
+        with store.transaction() as db:
+            moment = time.time()
+            attempt = db.execute("SELECT * FROM login_attempts WHERE ip=?", (address,)).fetchone()
+            if attempt and attempt["until"] > moment:
+                raise HTTPException(429, "Много попыток входа. Повторите через 5 минут")
+            account = db.execute("SELECT * FROM users WHERE username=? AND enabled=1", (username,)).fetchone()
+            if not account or account["password_hash"] or not account["setup_code_hash"] or not verify_password(code, account["setup_code_hash"]):
+                failures = (attempt["failures"] if attempt and attempt["until"] > moment-300 else 0) + 1
+                db.execute("INSERT OR REPLACE INTO login_attempts VALUES(?,?,?)",
+                           (address, failures, moment+300 if failures>=8 else moment))
+                return JSONResponse({"detail": "Код первого входа недействителен"}, status_code=401)
+            db.execute("UPDATE users SET password_hash=?,setup_code_hash=NULL WHERE username=?",
+                       (password_hash(password), username))
+            db.execute("DELETE FROM sessions WHERE username=?", (username,))
+            db.execute("DELETE FROM login_attempts WHERE ip=?", (address,))
+            token, csrf, is_admin = new_session(db, username)
+            audit(db, username, "password_created", "user", {})
+        response = JSONResponse({"username": username, "admin": is_admin, "csrf": csrf})
+        cookie(response, token, idle_seconds)
         return response
 
     @app.get("/api/me")
@@ -322,17 +394,35 @@ def create_app(data_directory=None):
 
     @app.get("/api/admin/users")
     def users(user=Depends(admin)):
-        return store.all("SELECT username,enabled FROM users ORDER BY username")
+        return store.all("""SELECT username,enabled,is_admin,
+                           CASE WHEN password_hash IS NULL THEN 1 ELSE 0 END AS needs_password
+                           FROM users ORDER BY username""")
 
     @app.post("/api/admin/users")
     def add_user(data: dict, user=Depends(admin)):
         username = str(data.get("username", "")).strip()
         if not username or len(username) > 64 or not all(c.isalnum() or c in "_.-" for c in username):
             raise ValueError("Недопустимый username")
+        code = secrets.token_urlsafe(18)
         with store.transaction() as db:
-            db.execute("INSERT OR IGNORE INTO users(username) VALUES(?)", (username,))
-            audit(db, user["username"], "user_created", username, {})
-        return {"ok": True}
+            if db.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone():
+                raise HTTPException(409, "Сотрудник с таким username уже существует")
+            db.execute("INSERT INTO users(username,setup_code_hash) VALUES(?,?)",
+                       (username, password_hash(code)))
+            audit(db, user["username"], "user_created", username, {"requires_password": True})
+        return {"ok": True, "username": username, "setup_code": code}
+
+    @app.post("/api/admin/users/{username}/reset-password")
+    def reset_password(username: str, user=Depends(admin)):
+        code = secrets.token_urlsafe(18)
+        with store.transaction() as db:
+            if not db.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone():
+                raise HTTPException(404, "Сотрудник не найден")
+            db.execute("UPDATE users SET password_hash=NULL,setup_code_hash=? WHERE username=?",
+                       (password_hash(code), username))
+            db.execute("DELETE FROM sessions WHERE username=?", (username,))
+            audit(db, user["username"], "password_reset", username, {})
+        return {"ok": True, "username": username, "setup_code": code}
 
     @app.get("/api/admin/audit")
     def events(user=Depends(admin)):
