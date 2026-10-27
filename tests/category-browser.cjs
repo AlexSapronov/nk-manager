@@ -8,7 +8,7 @@ async function main(){
  for(let i=0;i<100;i++){try{if((await fetch(origin+'/health')).ok)break;}catch(_){}if(child.exitCode!==null)throw new Error(logs);await new Promise(r=>setTimeout(r,100));}
  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.CHROMIUM_EXECUTABLE_PATH}:{}),args:process.env.CHROMIUM_ARGS?JSON.parse(process.env.CHROMIUM_ARGS):[]});
  const page=await browser.newPage({viewport:{width:1366,height:900},colorScheme:'dark'});page.on('pageerror',e=>report.errors.push(e.message));
- await page.goto(origin);await page.locator('#login-username').fill('tester');await page.locator('#login-form button[type="submit"]').click();await page.locator('#category-filter').waitFor();
+ await page.goto(origin);await page.locator('#login-username').fill('tester');await page.locator('#login-password').fill('isolated-test-admin-password');await page.locator('#login-form button[type="submit"]').click();await page.locator('#category-filter').waitFor();
  const csrf=await page.evaluate(()=>state.user.csrf),long='8541490000 Прочие приборы полупроводниковые фоточувствительные, включая фотогальванические элементы, собранные или не собранные в модули, вмонтированные или не вмонтированные в панели; светодиоды (LED)';
  const categories=[long,'8536699008 Прочие патроны для ламп, штепсели и розетки','Штепсели и розетки'];
  for(const [i,category] of categories.entries()){const r=await page.request.post(origin+'/api/cards',{headers:{Origin:origin,'X-CSRF-Token':csrf},data:{pn:'CATEGORY-'+i,name:'Товар '+i,category}});assert.equal(r.status(),200,await r.text());}
