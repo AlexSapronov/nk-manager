@@ -112,7 +112,10 @@ def create_app(data_directory=None):
             return JSONResponse({"detail": "Запрос превышает 3 МБ"}, status_code=413)
         response = await call_next(request)
         if getattr(request.state, "renew_session", False):
-            set_session_cookie(response, request.cookies[cookie_name])
+            token = request.cookies.get(cookie_name, "")
+            if store.one("SELECT 1 FROM sessions WHERE token_hash=? AND expires>?",
+                         (hashlib.sha256(token.encode()).hexdigest(), time.time())):
+                set_session_cookie(response, token)
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
