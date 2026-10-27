@@ -408,17 +408,35 @@ def create_app(data_directory=None):
 
     @app.get("/api/admin/users")
     def users(user=Depends(admin)):
-        return store.all("SELECT username,enabled FROM users ORDER BY username")
+        return store.all("""SELECT username, enabled, is_admin,
+                            CASE WHEN password_hash IS NULL THEN 0 ELSE 1 END AS password_set
+                            FROM users ORDER BY username""")
 
     @app.post("/api/admin/users")
     def add_user(data: dict, user=Depends(admin)):
         username = str(data.get("username", "")).strip()
         if not username or len(username) > 64 or not all(c.isalnum() or c in "_.-" for c in username):
             raise ValueError("Недопустимый username")
+        code = secrets.token_urlsafe(18)
         with store.transaction() as db:
-            db.execute("INSERT OR IGNORE INTO users(username) VALUES(?)", (username,))
-            audit(db, user["username"], "user_created", username, {})
-        return {"ok": True}
+            if db.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone():
+                raise ValueError("Этот username уже существует")
+            db.execute("INSERT INTO users(username,enrollment_hash) VALUES(?,?)",
+                       (username, password_hash(code)))
+            audit(db, user["username"], "user_created", username, {"enrollment_required": True})
+        return {"ok": True, "username": username, "temporary_code": code}
+
+    @app.post("/api/admin/users/{username}/reset-password")
+    def reset_user_password(username: str, user=Depends(admin)):
+        code = secrets.token_urlsafe(18)
+        with store.transaction() as db:
+            if not db.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone():
+                raise HTTPException(404, "Пользователь не найден")
+            db.execute("UPDATE users SET password_hash=NULL, enrollment_hash=? WHERE username=?",
+                       (password_hash(code), username))
+            db.execute("DELETE FROM sessions WHERE username=?", (username,))
+            audit(db, user["username"], "password_reset", username, {})
+        return {"ok": True, "username": username, "temporary_code": code}
 
     @app.get("/api/admin/audit")
     def events(user=Depends(admin)):
