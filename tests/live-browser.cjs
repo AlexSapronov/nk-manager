@@ -28,9 +28,9 @@ async function main(){
  const visible=selector=>page.locator(selector).waitFor({state:'visible'});
  const shot=async name=>{await page.screenshot({path:path.join(shots,name+'.png')});report.screenshots.push(name+'.png');};
  await page.goto(origin);await visible('#login-screen');
- await page.locator('#login-username').fill('employee');await page.locator('#login-password').fill('employee-password');await page.locator('#login-form button[type="submit"]').click();await visible('.registry');
+ await page.locator('#login-username').fill('tester');await page.locator('#login-password').fill('isolated-test-admin-password');await page.locator('#login-form button[type="submit"]').click();await visible('.registry');
  assert.equal(await page.locator('#rows tbody tr').count(),0);assert((await page.locator('.empty').innerText()).includes('Каталог пуст'));
- assert.equal(await page.locator('nav a[href="#admin"]').count(),0);check('Login, empty real database and employee navigation');
+ assert.equal(await page.locator('nav a[href="#admin"]').count(),1);check('Login, empty real database and administrator navigation');
  await page.locator('#create').click();await visible('#creation-pn');
  await page.locator('#creation-pn').fill('BROWSER-ALPHA');await page.locator('#creation-tnved').fill('8536901000');await page.locator('#creation-brand').fill('Hsuan Mao');
  const dictionary=(await(await page.request.get(origin+'/api/creation/catalog')).json()).kinds;
