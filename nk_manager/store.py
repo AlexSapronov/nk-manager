@@ -31,7 +31,7 @@ def password_hash(password):
 def verify_password(password, value):
     try:
         raw = base64.b64decode(value, validate=True)
-        return hmac.compare_digest(raw[16:], hashlib.scrypt(password.encode(), salt=raw[:16], n=16384, r=8, p=1))
+        return len(raw) == 80 and hmac.compare_digest(raw[16:], hashlib.scrypt(password.encode(), salt=raw[:16], n=16384, r=8, p=1))
     except (ValueError, TypeError):
         return False
 
@@ -39,7 +39,7 @@ def verify_password(password, value):
 SCHEMA = """
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY,enabled INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY,enabled INTEGER NOT NULL DEFAULT 1, password_hash TEXT, enrollment_hash TEXT, is_admin INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,username TEXT NOT NULL,admin INTEGER NOT NULL,csrf TEXT NOT NULL,expires REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS login_attempts(ip TEXT PRIMARY KEY,failures INTEGER NOT NULL,until REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS cards(id TEXT PRIMARY KEY,external_id TEXT UNIQUE,source TEXT NOT NULL,external_status TEXT,
@@ -70,7 +70,26 @@ class Store:
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
-            db.execute("INSERT OR IGNORE INTO settings VALUES('schema_version','1')")
+            # Existing installations had passwordless users and a shared admin password.
+            # Migrate only once; never turn any other user into an admin.
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(users)")}
+            legacy = "password_hash" not in columns
+            if "password_hash" not in columns:
+                db.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+            if "enrollment_hash" not in columns:
+                db.execute("ALTER TABLE users ADD COLUMN enrollment_hash TEXT")
+            if "is_admin" not in columns:
+                db.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+            if legacy:
+                original = db.execute("SELECT actor FROM audit WHERE action='setup' ORDER BY id LIMIT 1").fetchone()
+                old_hash = db.execute("SELECT value FROM settings WHERE key='admin_hash'").fetchone()
+                if original and old_hash:
+                    db.execute("UPDATE users SET is_admin=1, password_hash=? WHERE username=?",
+                               (old_hash["value"], original["actor"]))
+                # Old sessions could carry admin rights for any account.
+                db.execute("DELETE FROM sessions")
+            db.execute("INSERT OR IGNORE INTO settings VALUES('schema_version','2')")
+            db.execute("UPDATE settings SET value='2' WHERE key='schema_version' AND CAST(value AS INTEGER)<2")
         os.chmod(self.path, 0o600)
 
     def connect(self):
@@ -104,12 +123,12 @@ class Store:
         with self.transaction() as db:
             if db.execute("SELECT 1 FROM settings WHERE key='admin_hash'").fetchone():
                 raise ValueError("Приложение уже настроено; существующий пароль не изменён")
-            if len(password) < 12:
-                raise ValueError("Пароль администратора: минимум 12 символов")
+            if len(password) < 8:
+                raise ValueError("Пароль администратора: минимум 8 символов")
             if not username or len(username) > 64 or not all(c.isalnum() or c in '_-.' for c in username):
                 raise ValueError("Username: буквы, цифры, точка, дефис, подчёркивание")
             db.execute("INSERT INTO settings VALUES('admin_hash',?)", (password_hash(password),))
-            db.execute("INSERT INTO users(username) VALUES(?)", (username,))
+            db.execute("INSERT INTO users(username,password_hash,is_admin) VALUES(?,?,1)", (username, password_hash(password)))
             audit(db, username, "setup", "organization", {"local_only": True})
 
 
