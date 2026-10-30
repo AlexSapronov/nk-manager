@@ -65,7 +65,7 @@ async function main(){
  await page.locator('nav a[href="#templates"]').click();await visible('#export-catalog');const downloadPromise=page.waitForEvent('download');await page.locator('#export-catalog').click();const downloaded=await downloadPromise;const zip=path.join(dir,'analysis.zip');await downloaded.saveAs(zip);
  const inspect=spawnSync(python,['-c',"from zipfile import ZipFile; import json,sys; z=ZipFile(sys.argv[1]); j=json.loads(z.read('catalog.json')); assert len(j['cards'])==2; assert any(c['attributes'].get('Страна')=='Китай' for c in j['cards']); assert 'summary.xlsx' in z.namelist()",zip],{encoding:'utf8'});assert.equal(inspect.status,0,inspect.stderr);check('Download analysis ZIP containing actual saved cards and XLSX');
  await page.locator('nav a[href="#batches"]').click();await visible('[data-result]');await page.locator('[data-result]').click();await visible('#dialog[open]');await page.locator('#dialog [data-close]').first().click();
- await page.locator('#logout').click();await visible('#login-screen');await page.locator('#login-username').fill('tester');await page.locator('#login-password').fill('isolated-test-admin-password');await page.locator('#login-form button[type="submit"]').click();await visible('nav a[href="#admin"]');await page.locator('nav a[href="#admin"]').click();await visible('#new-user');await shot('live-admin');check('Real batch results, logout and separate admin password');
+ await page.locator('#logout').click();await visible('#login-screen');await page.locator('#login-username').fill('tester');await page.locator('#login-password').fill('isolated-test-admin-password');await page.locator('#login-form button[type="submit"]').click();await visible('nav a[href="#admin"]');await page.locator('nav a[href="#admin"]').click();await page.locator('[data-admin-tab="people"]').click();await visible('#new-user');await shot('live-admin');check('Real batch results, logout and separate admin password');
  for(const width of [1366,1100,900]){await page.setViewportSize({width,height:768});assert(await page.evaluate(()=>{const side=document.querySelector('.sidebar').getBoundingClientRect();return [...document.querySelectorAll('.sidebar nav a')].every(a=>a.getBoundingClientRect().right<=side.right+1&&a.scrollWidth<=a.clientWidth+1);}),'Admin navigation must fit inside sidebar at '+width);}
  await page.setViewportSize({width:1366,height:768});
 
@@ -85,7 +85,7 @@ async function main(){
  for(const [width,height] of [[1440,900],[1920,1080],[390,844]]){await page.setViewportSize({width,height});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await shot(`live-${width}x${height}`);}
  check('Shared themes and desktop/mobile layouts of the real service');
  await page.setViewportSize({width:1366,height:900}); // Sidebar footer is not shown in compact mobile layout.
- await page.locator('nav a[href="#admin"]').click();await visible('#new-user');
+ await page.locator('nav a[href="#admin"]').click();await page.locator('[data-admin-tab="people"]').click();await visible('#new-user');
  await page.locator('#new-user').fill('first-login-user');await page.locator('#add-user').click();await visible('#temporary-code');
  const enrollmentCode=await page.locator('#temporary-code').inputValue();
  assert(enrollmentCode.length>=8);await page.locator('#dialog [data-close]').first().click();
