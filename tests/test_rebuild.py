@@ -85,3 +85,22 @@ def test_admin_endpoint_requires_strict_phrase_and_admin(app):
         assert client.post('/api/admin/nk/rebuild',json={'confirmed':True,'confirmation':'СБРОСИТЬ'},headers=admin).status_code==422
         assert client.post('/api/admin/nk/rebuild',json={'confirmed':True,'discard_local_changes':True,'confirmation':'СБРОСИТЬ'},headers=admin).status_code==422
         assert client.get('/api/workspace/version').status_code==200
+
+
+def test_registry_summary_excludes_large_snapshot_but_full_card_is_available(app):
+    with TestClient(app,base_url=ORIGIN) as client:
+        headers=login(client,admin=True)
+        saved=client.post('/api/cards',json={'pn':'EXACT-PN-A','attributes':{'Товарный знак [#2504]':'BRAND','Описание [#33]':'Large text'}},headers=headers).json()
+        with app.state.store.transaction() as db:
+            db.execute('UPDATE cards SET source_snapshot=? WHERE id=?',
+                       (json.dumps({'nk':{'good_id':902,'notes':'x'*20000},'creation':{'cat_id':12}}),saved['id']))
+        index=client.get('/api/cards/summary').json()
+        assert len(index)==1
+        assert index[0]['pn']=='EXACT-PN-A'
+        assert index[0]['attributes']=={'Товарный знак [#2504]':'BRAND'}
+        assert index[0]['source_snapshot']=={'creation':{'cat_id':12}}
+        assert 'Large text' not in str(index)
+        assert len(str(index))<2500
+        detail=client.get('/api/cards/'+saved['id']).json()
+        assert detail['attributes']['Описание [#33]']=='Large text'
+        assert len(detail['source_snapshot']['nk']['notes'])==20000
