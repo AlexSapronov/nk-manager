@@ -687,6 +687,12 @@ class Engine:
 
     @staticmethod
     def matches_entry(entry,raw):
+        if entry.get("gtin") and not any(
+            str(i.get("value") or "").zfill(14) == str(entry["gtin"]).zfill(14)
+            for i in raw.get("identified_by",[])
+            if i.get("type")=="gtin" and i.get("level")=="trade-unit"
+        ):
+            return False
         if entry.get("categories") and not set(map(str,entry["categories"])).issubset({str(x.get("cat_id")) for x in raw.get("categories",[])}):
             return False
         if entry.get("good_name") and entry["good_name"]!=raw.get("good_name"):
