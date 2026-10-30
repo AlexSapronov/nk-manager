@@ -178,7 +178,8 @@ def finish(engine, job):
 
 def status(store):
     row = store.one("""SELECT h.job_id,h.backup,h.previous_cards,h.restored_cards,h.state,
-                              j.state AS job_state,j.error,j.updated
+                              j.state AS job_state,j.error,j.updated,
+                              (SELECT COUNT(*) FROM nk_rebuild_stage st WHERE st.job_id=h.job_id) AS staged_cards
                        FROM nk_rebuild_history h JOIN nk_jobs j ON j.id=h.job_id
                        ORDER BY h.created DESC LIMIT 1""")
     return row
