@@ -45,6 +45,9 @@ class BulkNK(NK):
         elif path=='/v3/feed-status':result={'status':'Rejected' if self.rejected else 'Received'}
         elif path=='/v3/feed-product' and any(p in request.url.params for p in ('gtin','good_id','gtins','good_ids')):
             found=next((r for g,r in self.goods.items() if g==(request.url.params.get('gtins') or request.url.params.get('gtin')) or str(r['good_id'])==(request.url.params.get('good_ids') or request.url.params.get('good_id'))),None)
+            # Keep the fixture's preexisting NK good visible for the initial sync.
+            if not found and (request.url.params.get('good_ids') or request.url.params.get('good_id'))==str(self.raw['good_id']):
+                return super().handle(request)
             result=[copy.deepcopy(found)] if found else []
         else:return super().handle(request)
         self.requests.append((request.method,path,dict(request.url.params),request.content))
