@@ -275,7 +275,7 @@ def create_app(data_directory=None):
         """Cheap invalidation token, not a full cards/workspace serialization."""
         return {"version": ":".join(map(str, (
             store.one("SELECT COALESCE(MAX(id),0) AS value FROM audit")["value"],
-            store.one("SELECT COALESCE(MAX(updated),'') AS value FROM nk_jobs")["value"],
+            store.one("SELECT COALESCE(MAX(updated),'') AS value FROM nk_jobs WHERE kind NOT IN ('sync','rebuild')")["value"],
             store.one("SELECT COUNT(*) AS value FROM cards")["value"]
         )))}
 
