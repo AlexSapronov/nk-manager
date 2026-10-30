@@ -104,6 +104,10 @@ def finish(engine, job):
         progress = json.loads(job['result'] or '{}')
         if progress.get('windows') or type(progress.get('count')) is not int or progress['count'] != count:
             raise Conflict('Количество полученных карточек отличается от полного списка НК; локальная база сохранена')
+        previous_remote = db.execute('SELECT COUNT(*) FROM nk_cards').fetchone()[0]
+        if previous_remote and count * 5 < previous_remote * 4:
+            raise Conflict(f'НК вернул только {count} из как минимум {previous_remote} ранее известных карточек. '
+                           'Снижение более 20% требует ручной проверки, активная база не изменена')
         hist = db.execute('SELECT * FROM nk_rebuild_history WHERE job_id=?', (job['id'],)).fetchone()
         if not hist:
             raise Conflict('Не найдены сведения о резервной копии. Данные сохранены')
