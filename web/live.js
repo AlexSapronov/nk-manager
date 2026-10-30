@@ -33,7 +33,11 @@ function bind(id,fn){const el=$(id);if(el)el.onclick=async event=>{if(el.disable
 function heading(title,description,actions=''){return `<div class="page-heading"><div><h1>${title}</h1><p>${description}</p></div><div class="actions">${actions}</div></div>`;}
 function badge(c){return `<span class="badge ${c.dirty?'amber':''}">${esc(c.external_status||'Нет статуса НК')}</span>`;}
 function leave(){return !state.dirty||window.confirm('Есть несохранённый ввод. Закрыть без сохранения?');}
-async function reloadCards(){const [cards,workspace]=await Promise.all([api('/api/cards'),api('/api/drafts/workspace')]);state.cards=cards;state.draftWorkspace=workspace;if(!state.showPublishedDrafts){const hidden=new Set(workspace.entries.filter(e=>e.published_ids.length).map(e=>e.id));state.selected=new Set([...state.selected].filter(id=>!hidden.has(id)));}}
+async function reloadCards(force=false){
+ const marker=await api('/api/workspace/version');
+ if(!force&&state.workspaceVersion===marker.version)return false;
+ const [cards,workspace]=await Promise.all([api('/api/cards'),api('/api/drafts/workspace')]);
+ state.cards=cards;state.draftWorkspace=workspace;state.workspaceVersion=marker.version;if(!state.showPublishedDrafts){const hidden=new Set(workspace.entries.filter(e=>e.published_ids.length).map(e=>e.id));state.selected=new Set([...state.selected].filter(id=>!hidden.has(id)));}return true;}
 async function render(){
  $('#nav').innerHTML=Object.keys(labels).filter(p=>p!=='admin'||state.user.admin).map(p=>`<a href="#${p}" class="${p===state.page?'active':''}"><span>${icons[p]}</span><span class="nav-label">${labels[p]}</span></a>`).join('');$('#breadcrumb').textContent=labels[state.page];
  try{if(['cards','drafts'].includes(state.page)){await reloadCards();registry();}else if(state.page==='import')renderImport();else if(state.page==='templates')await templates();else if(state.page==='batches')await batches();else if(state.page==='admin')await admin();}catch(error){showError(error);}
@@ -122,7 +126,7 @@ async function templates(){
 async function templatePlan(){await TemplateFlow.preview([...state.selected]);}
 
 async function batches(){await NkUI.refreshStatus();const data=await api('/api/imports');$('#main').innerHTML=heading('Партии и операции НК','Фактические результаты и подтверждения внешних операций')+NkUI.jobsHtml(state.nkStatus)+`<div class="stack">${data.map(p=>`<section class="section"><h2>${esc(p.filename)}</h2><p class="muted">${esc(p.created)} · ${esc(p.actor)}</p><p>${JSON.parse(p.results).filter(r=>['created','updated'].includes(r.status)).length} строк сохранено</p><button data-result="${p.id}">Показать результаты</button></section>`).join('')||'<div class="section empty"><b>Импортов пока нет</b>Здесь появятся партии после сохранения настоящих файлов.</div>'}</div>`;NkUI.bindJobs();$$('[data-result]').forEach(b=>b.onclick=()=>showResults('Результаты партии',JSON.parse(data.find(p=>p.id===b.dataset.result).results)));}
-async function admin(){await NkUI.refreshStatus();if(!state.user.admin){state.page='cards';await render();return;}const [health,users,events]=await Promise.all([api('/health'),api('/api/admin/users'),api('/api/admin/audit')]);$('#main').innerHTML=heading('Администрирование','Настоящая серверная сессия администратора')+`<section id="bulk-creation" class="section"></section>`+NkUI.adminHtml(state.nkStatus)+`<section class="section"><h2>НК и версия</h2><div class="notice">Проверьте ключ, выполните синхронизацию и подключите Windows-подписант. Внешние действия требуют отдельного подтверждения.</div><p>Версия ${esc(health.version)} · схема БД ${health.schema}<br>Commit <span class="mono">${esc(health.commit)}</span><br>Assets ${esc(health.assets)} · запуск ${esc(health.started)}</p></section><section class="section"><h2>Сотрудники</h2><div class="user-list">${users.map(u=>`<div class="row user-row"><b>${esc(u.username)}</b> <span class="muted">${u.is_admin?'Администратор':'Сотрудник'} · ${u.password_set?'Пароль установлен':'Ожидает первого входа'}</span> <button data-reset-password="${esc(u.username)}">Сбросить пароль</button></div>`).join('')}</div><div class="actions"><input id="new-user" placeholder="Новый username" maxlength="64"><button id="add-user">Создать сотрудника</button></div></section><section class="section"><h2>Журнал последних действий</h2><div class="content-scroll"><table><tr><th>Время</th><th>Кто</th><th>Действие</th></tr>${events.map(e=>`<tr><td>${esc(e.created)}</td><td>${esc(e.actor)}</td><td>${esc(eventName(e.action))}</td></tr>`).join('')}</table></div></section>`;NkUI.bindAdmin();await BulkCreation.mount();bind('#add-user',async()=>{const created=await api('/api/admin/users',json('POST',{username:$('#new-user').value}));await admin();showTemporaryCode(created);});
+async function admin(){await NkUI.refreshStatus();if(!state.user.admin){state.page='cards';await render();return;}const [health,users,events]=await Promise.all([api('/health'),api('/api/admin/users'),api('/api/admin/audit')]);$('#main').innerHTML=heading('Администрирование','Настоящая серверная сессия администратора')+`<section id="bulk-creation" class="section"></section>`+NkUI.adminHtml(state.nkStatus)+`<section class="section"><h2>НК и версия</h2><div class="notice">Проверьте ключ, выполните синхронизацию и подключите Windows-подписант. Внешние действия требуют отдельного подтверждения.</div><p>Версия ${esc(health.version)} · схема БД ${health.schema}<br>Commit <span class="mono">${esc(health.commit)}</span><br>Assets ${esc(health.assets)} · запуск ${esc(health.started)}</p></section><section class="section"><h2>Сотрудники</h2><div class="user-list">${users.map(u=>`<div class="row user-row"><b>${esc(u.username)}</b> <span class="muted">${u.is_admin?'Администратор':'Сотрудник'} · ${u.password_set?'Пароль установлен':'Ожидает первого входа'}</span> <button data-reset-password="${esc(u.username)}">Сбросить пароль</button></div>`).join('')}</div><div class="actions"><input id="new-user" placeholder="Новый username" maxlength="64"><button id="add-user">Создать сотрудника</button></div></section><section class="section"><h2>Журнал последних действий</h2><div class="content-scroll"><table><tr><th>Время</th><th>Кто</th><th>Действие</th></tr>${events.map(e=>`<tr><td>${esc(e.created)}</td><td>${esc(e.actor)}</td><td>${esc(eventName(e.action))}</td></tr>`).join('')}</table></div></section>`;NkUI.bindAdmin();await BulkCreation.mount();setupAdminSections();bind('#add-user',async()=>{const created=await api('/api/admin/users',json('POST',{username:$('#new-user').value}));await admin();showTemporaryCode(created);});
  $$('[data-reset-password]').forEach(button=>button.onclick=async()=>{
   const username=button.dataset.resetPassword;
   if(!confirm('Сбросить пароль пользователя '+username+'? Все его сессии завершатся.'))return;
@@ -132,6 +136,30 @@ async function admin(){await NkUI.refreshStatus();if(!state.user.admin){state.pa
    showTemporaryCode(result);
   }catch(error){showError(error);}
  });
+}
+function setupAdminSections(){
+ const root=$('#main');if(!root)return;
+ const sections=$(':scope > section.section',root);
+ const tabs=[['connection','Подключение'],['bulk','Массовые операции'],['people','Сотрудники'],['audit','Журнал']];
+ const nav=document.createElement('nav');nav.className='admin-tabs';nav.setAttribute('aria-label','Разделы администрирования');
+ nav.innerHTML=tabs.map(([id,label])=>`<button type="button" data-admin-tab="${id}">${label}</button>`).join('');
+ root.querySelector('.page-heading')?.insertAdjacentElement('afterend',nav);
+ for(const section of sections){
+   const title=section.querySelector('h2')?.textContent||'';
+   section.dataset.adminGroup=section.id==='bulk-creation'||section.id==='gtin-recovery'?'bulk':
+     /Сотрудники/.test(title)?'people':/Журнал/.test(title)?'audit':'connection';
+ }
+ const switchTo=id=>{
+   state.adminTab=id;
+   for(const section of sections)section.hidden=section.dataset.adminGroup!==id;
+   $('[data-admin-tab]',nav).forEach(button=>{
+     const active=button.dataset.adminTab===id;
+     button.classList.toggle('active',active);
+     button.setAttribute('aria-pressed',String(active));
+   });
+ };
+ $('[data-admin-tab]',nav).forEach(button=>button.onclick=()=>switchTo(button.dataset.adminTab));
+ switchTo(state.adminTab||'connection');
 }
 function showTemporaryCode(result){
  modal('Одноразовый код: '+esc(result.username),`<p>Передайте этот код лично пользователю. При первом входе он укажет username и этот код, затем дважды введёт собственный пароль.</p><label class="field">Код (отображается только сейчас)<input id="temporary-code" readonly value="${esc(result.temporary_code)}"></label><p class="muted">Код хранится на сервере только в виде хеша. После установки пароля повторное использование невозможно.</p>`,'<button id="copy-temp-code" class="primary">Копировать код</button><button data-close>Закрыть</button>');
@@ -196,6 +224,6 @@ api('/api/me').then(user=>{state.user=user;return start();}).catch(()=>{});
 
 window.addEventListener('unhandledrejection',event=>{event.preventDefault();showError(event.reason instanceof Error?event.reason:new Error('Операция не завершена. Обновите сессию.'));});
 
-setInterval(()=>NkUI.refreshStatus(),10000);
+setInterval(()=>{if(state.user&&document.visibilityState==='visible')NkUI.refreshStatus();},30000);
 
-setInterval(async()=>{if(state.user&&state.page==='drafts'&&!state.dirty&&!state.drawer&&!$('#dialog').open&&document.visibilityState==='visible'&&!['INPUT','SELECT'].includes(document.activeElement?.tagName)){try{await reloadCards();DraftUI.render();}catch(_){/* Explicit refresh remains available. */}}},10000);
+setInterval(async()=>{if(state.user&&state.page==='drafts'&&!state.dirty&&!state.drawer&&!$('#dialog').open&&document.visibilityState==='visible'&&!['INPUT','SELECT'].includes(document.activeElement?.tagName)){try{if(await reloadCards())DraftUI.render();}catch(_){/* Explicit refresh remains available. */}}},30000);
