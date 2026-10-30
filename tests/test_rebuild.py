@@ -104,3 +104,20 @@ def test_registry_summary_excludes_large_snapshot_but_full_card_is_available(app
         detail=client.get('/api/cards/'+saved['id']).json()
         assert detail['attributes']['Описание [#33]']=='Large text'
         assert len(detail['source_snapshot']['nk']['notes'])==20000
+
+
+def test_rebuild_rejects_unexplained_remote_catalogue_shrink(env):
+    import copy
+    store, service, engine, remote, *_=env
+    for number in range(200,205):
+        other=copy.deepcopy(remote.raw)
+        other['good_id']=number
+        other['good_name']='PRODUCT-'+str(number)
+        other['good_attrs']=[dict(a,attr_value='PN-'+str(number)) if a['attr_id']==2 else a for a in other['good_attrs']]
+        engine.apply_remote(other)
+    old=len(service.cards())
+    job=begin(engine,'tester')
+    tick(engine);tick(engine)
+    assert store.one('SELECT state FROM nk_jobs WHERE id=?',(job,))['state']=='failed'
+    assert len(service.cards())==old
+    assert '20%' in store.one('SELECT error FROM nk_jobs WHERE id=?',(job,))['error']
