@@ -139,7 +139,7 @@ async function admin(){await NkUI.refreshStatus();if(!state.user.admin){state.pa
 }
 function setupAdminSections(){
  const root=$('#main');if(!root)return;
- const sections=$(':scope > section.section',root);
+ const sections=$$(':scope > section.section',root);
  const tabs=[['connection','Подключение'],['bulk','Массовые операции'],['people','Сотрудники'],['audit','Журнал']];
  const nav=document.createElement('nav');nav.className='admin-tabs';nav.setAttribute('aria-label','Разделы администрирования');
  nav.innerHTML=tabs.map(([id,label])=>`<button type="button" data-admin-tab="${id}">${label}</button>`).join('');
