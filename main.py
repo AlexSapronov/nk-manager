@@ -118,6 +118,12 @@ def create_app(data_directory=None):
                 return JSONResponse({"detail": "Загрузка: нужен Content-Length, максимум 20 МБ файла"}, status_code=413)
         elif request.headers.get("content-length", "").isdigit() and int(request.headers["content-length"]) > 3 * 1024 * 1024:
             return JSONResponse({"detail": "Запрос превышает 3 МБ"}, status_code=413)
+        # Freeze business mutations while a verified full snapshot is being staged.
+        # Credentials, sessions and audit remain available.
+        if request.method not in ("GET","HEAD","OPTIONS") and request.url.path.startswith("/api/"):
+            from nk_manager.rebuild import running
+            if running(store) and request.url.path not in ("/api/login","/api/logout","/api/password/change","/api/password/activate","/api/admin/nk/rebuild"):
+                return JSONResponse({"detail":"Идёт полная перестройка каталога НК. Изменения временно заблокированы до завершения загрузки."},status_code=409)
         response = await call_next(request)
         if getattr(request.state, "renew_session", False):
             token = request.cookies.get(cookie_name, "")
@@ -254,6 +260,15 @@ def create_app(data_directory=None):
     @app.get("/api/cards")
     def cards(user=Depends(session)):
         return service.cards()
+
+    @app.get("/api/workspace/version")
+    def workspace_version(user=Depends(session)):
+        """Cheap invalidation token, not a full cards/workspace serialization."""
+        return {"version": ":".join(map(str, (
+            store.one("SELECT COALESCE(MAX(id),0) AS value FROM audit")["value"],
+            store.one("SELECT COALESCE(MAX(updated),'') AS value FROM nk_jobs")["value"],
+            store.one("SELECT COUNT(*) AS value FROM cards")["value"]
+        )))}
 
     @app.get("/api/duplicates")
     def duplicates(pn: str = "", gtin: str = "", exclude: str = "", user=Depends(session)):
@@ -474,8 +489,21 @@ def create_app(data_directory=None):
         return {"token":nk.config().get("signer_token","")}
 
     @app.post("/api/nk/sync")
-    def nk_sync(user=Depends(session)):
-        return {"id":nk.sync(user["username"])}
+    def nk_sync(data: dict = {}, user=Depends(session)):
+        return {"id":nk.sync(user["username"],full=data.get("full") is True)}
+
+    @app.get("/api/admin/nk/rebuild")
+    def rebuild_status(user=Depends(admin)):
+        from nk_manager.rebuild import status
+        return status(store) or {"state":"never"}
+
+    @app.post("/api/admin/nk/rebuild")
+    def rebuild_begin(data: dict,user=Depends(admin)):
+        if (data.get("confirmed") is not True or data.get("discard_local_changes") is not True
+            or data.get("confirmation") != "СБРОСИТЬ"):
+            raise ValueError('Подтвердите удаление локальных правок и введите СБРОСИТЬ')
+        from nk_manager.rebuild import begin
+        return {"job_id":begin(nk,user["username"])}
 
     @app.get("/api/nk/categories")
     def nk_categories(tnved: str, user=Depends(session)):
