@@ -41,6 +41,7 @@ def create_app(data_directory=None):
             nk.stop.set()
             if nk.thread:
                 await run_in_threadpool(nk.thread.join,50)
+            nk.client.close()
 
     app = FastAPI(title="Менеджер НК", docs_url=None, redoc_url=None, openapi_url=None,lifespan=lifespan)
     app.state.store = store
