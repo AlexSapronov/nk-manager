@@ -101,12 +101,18 @@ def finish(engine, job):
         count = db.execute('SELECT COUNT(*) FROM nk_rebuild_stage WHERE job_id=?', (job['id'],)).fetchone()[0]
         if count < 1:
             raise Conflict('НК вернул пустой каталог. Локальные данные не удалены')
+        progress = json.loads(job['result'] or '{}')
+        if progress.get('windows') or type(progress.get('count')) is not int or progress['count'] != count:
+            raise Conflict('Количество полученных карточек отличается от полного списка НК; локальная база сохранена')
         hist = db.execute('SELECT * FROM nk_rebuild_history WHERE job_id=?', (job['id'],)).fetchone()
         if not hist:
             raise Conflict('Не найдены сведения о резервной копии. Данные сохранены')
         backup = store.directory / 'backups' / hist['backup']
         if not backup.is_file():
             raise Conflict('Резервная копия исчезла. Сброс запрещён')
+        changed = db.execute("SELECT COUNT(*) FROM cards WHERE updated>?",(hist['created'],)).fetchone()[0]
+        if changed:
+            raise Conflict('Во время загрузки изменились локальные карточки. Замена отменена; старый каталог и backup сохранены')
         tables = _tables(db)
         # A secondary guard protects against concurrent client writes during staging.
         if db.execute("SELECT COUNT(*) FROM nk_jobs WHERE id!=? AND state NOT IN ('confirmed','failed','cancelled')",(job['id'],)).fetchone()[0]:
