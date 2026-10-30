@@ -209,3 +209,19 @@ def test_probe_is_not_retried_when_nk_rejects_minimal_feed(env):
     with pytest.raises(Conflict):
         enqueue(engine,'tester',batch['id'],[2])
     assert remote.allocations==0
+
+
+def test_recovery_probe_prevents_repeated_gtin_across_different_files(env):
+    from nk_manager.gs1_probe import enqueue
+    from nk_manager.service import Conflict
+    import pytest
+    store,_,engine,*_=env
+    remote=RecoveryNK(present=False)
+    engine.client.transport=httpx.MockTransport(remote.handle)
+    first=preview(engine,'tester',xlsx([[gtin(45),'MORNSUN']]),'a.xlsx')
+    second=preview(engine,'tester',xlsx([[gtin(45),'MORNSUN'],[gtin(46),'MORNSUN']]),'b.xlsx')
+    tick(engine)
+    enqueue(engine,'tester',first['id'],[2])
+    with pytest.raises(Conflict,match='другой партии'):
+        enqueue(engine,'tester',second['id'],[2])
+    assert remote.feeds==0
