@@ -49,6 +49,15 @@ class Client:
     def __init__(self, config, transport=None):
         self.config, self.transport = config, transport
         self.retry_until=0
+        self._http = None
+        self._http_transport = None
+        self._http_lock = threading.RLock()
+
+    def close(self):
+        with self._http_lock:
+            if self._http:
+                self._http.close()
+                self._http = None
 
     def call(self, method, path, params=None, body=None):
         if time.time()<self.retry_until:
@@ -58,10 +67,17 @@ class Client:
         if not key:
             raise RemoteError("Введите API KEY Национального каталога в админке")
         try:
-            with httpx.Client(timeout=45, follow_redirects=False, transport=self.transport) as client:
-                response = client.request(method, BASES[config.get("environment", "production")]+path,
-                                          params={**(params or {}), "apikey": key, "format": "json"}, json=body,
-                                          headers={"Accept": "application/json"})
+            # Reuse HTTP keep-alive / TLS connections between catalog pages.
+            # Tests may replace the transport with a synthetic NK after startup.
+            with self._http_lock:
+                if self._http is None or self._http_transport is not self.transport:
+                    if self._http is not None:
+                        self._http.close()
+                    self._http = httpx.Client(timeout=45,follow_redirects=False,transport=self.transport)
+                    self._http_transport = self.transport
+                response = self._http.request(method, BASES[config.get("environment", "production")]+path,
+                                              params={**(params or {}), "apikey": key, "format": "json"}, json=body,
+                                              headers={"Accept": "application/json"})
         except (httpx.HTTPError, OSError):
             # Never include httpx exception text: its URL contains the API key.
             raise RemoteError("Соединение с НК прервано; исход внешнего действия может быть неизвестен") from None
@@ -584,7 +600,7 @@ class Engine:
         else:
             progress["windows"][0][2] += len(goods)
         self.state(job["id"], "prepared" if progress["windows"] else "confirmed" if not rebuild else "prepared",
-                   progress, next_at=time.time()+2)
+                   progress, next_at=time.time()+4)
 
     def operation_tick(self, job):
         config = self.config()
