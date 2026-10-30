@@ -39,9 +39,9 @@ class RecoveryNK(NK):
         self.feeds=0;self.allocations=0
     def handle(self, request):
         path=request.url.path
-        if path=='/v3/feed-product' and 'gtin' in request.url.params:
+        if path=='/v3/feed-product' and ('gtin' in request.url.params or 'good_id' in request.url.params):
             self.requests.append((request.method,path,dict(request.url.params),request.content))
-            item=self.good if self.good and self.good['identified_by'][0]['value']==request.url.params['gtin'] else None
+            item=self.good if self.good and (self.good['identified_by'][0]['value']==request.url.params.get('gtin') or str(self.good['good_id'])==request.url.params.get('good_id')) else None
             return httpx.Response(200,json={'result':[copy.deepcopy(item)] if item else []})
         if path=='/v3/attributes':
             self.requests.append((request.method,path,dict(request.url.params),request.content))
