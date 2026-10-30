@@ -253,6 +253,10 @@ def start(engine, actor, batch_id, choices, confirm_brand=False):
         for r in rows:
             if not any(k['tnved'] == r['tnved'] and k['id'] == choices.get(r['tnved']) for k in catalog(engine.store)):
                 raise ValueError('Выберите вид товара для ТН ВЭД ' + r['tnved'])
+        if not confirm_brand:
+            missing = [r['row_no'] for r in rows if not (json.loads(r['remote']).get('brand_name') if r['remote'] else None)]
+            if missing:
+                raise Conflict('Для строк без товарного знака НК подтвердите использование производителя как бренда: ' + ', '.join(map(str, missing[:20])))
         with engine.store.transaction() as db:
             db.execute("UPDATE nk_recovery_batches SET state='running',actor=? WHERE id=?", (actor, batch_id))
             audit(db, actor, 'gtin_recovery_started', batch_id, {'rows': len(rows), 'kind_choices': choices})
@@ -281,8 +285,24 @@ def advance(engine):
                 continue
             try:
                 card = Service(store).get(row['card_id'])
-                job_id = engine.prepare(store.one('SELECT actor FROM nk_recovery_batches WHERE id=?',(row['batch_id'],))['actor'],
-                                        'save', card['id'], card['revision'])
+                # Recover an already enqueued operation after a crash, even when
+                # its outcome is failed/unknown. Never auto-retry a failed save.
+                previous = store.one("SELECT id FROM nk_jobs WHERE card_id=? AND kind='save' ORDER BY created DESC LIMIT 1", (card['id'],))
+                if previous:
+                    job_id = previous['id']
+                else:
+                    if not card['external_id']:
+                        from .nk import RemoteError
+                        try:
+                            checked = engine.client.call('GET', '/v3/feed-product', {'gtin': card['gtin']})
+                        except RemoteError as error:
+                            if error.code != 404:
+                                raise
+                            checked = []
+                        if checked:
+                            raise Conflict('GTIN появился в НК после проверки. Отправка новой карточки остановлена')
+                    job_id = engine.prepare(store.one('SELECT actor FROM nk_recovery_batches WHERE id=?',(row['batch_id'],))['actor'],
+                                            'save', card['id'], card['revision'])
                 update(store, row, save_job=job_id, state='queued')
             except ValueError as exc:
                 update(store, row, state='conflict', error=str(exc))
