@@ -262,6 +262,14 @@ def create_app(data_directory=None):
     def cards(user=Depends(session)):
         return service.cards()
 
+    @app.get("/api/cards/summary")
+    def cards_summary(user=Depends(session)):
+        return service.summaries()
+
+    @app.get("/api/cards/{id}")
+    def get_card(id: str,user=Depends(session)):
+        return service.get(id)
+
     @app.get("/api/workspace/version")
     def workspace_version(user=Depends(session)):
         """Cheap invalidation token, not a full cards/workspace serialization."""
