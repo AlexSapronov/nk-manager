@@ -39,9 +39,9 @@ class RecoveryNK(NK):
         self.feeds=0;self.allocations=0
     def handle(self, request):
         path=request.url.path
-        if path=='/v3/feed-product' and ('gtin' in request.url.params or 'good_id' in request.url.params):
+        if path=='/v3/feed-product' and any(p in request.url.params for p in ('gtin','gtins','good_id','good_ids')):
             self.requests.append((request.method,path,dict(request.url.params),request.content))
-            item=self.good if self.good and (self.good['identified_by'][0]['value']==request.url.params.get('gtin') or str(self.good['good_id'])==request.url.params.get('good_id')) else None
+            item=self.good if self.good and (self.good['identified_by'][0]['value']==(request.url.params.get('gtins') or request.url.params.get('gtin')) or str(self.good['good_id'])==(request.url.params.get('good_ids') or request.url.params.get('good_id'))) else None
             return httpx.Response(200,json={'result':[copy.deepcopy(item)] if item else []})
         if path=='/v3/attributes':
             self.requests.append((request.method,path,dict(request.url.params),request.content))
@@ -50,8 +50,15 @@ class RecoveryNK(NK):
             self.requests.append((request.method,path,dict(request.url.params),request.content))
             body=json.loads(request.content);self.feeds+=1
             if self.good is None:
-                self.good={'good_id':902,'good_name':body['good_name'],'good_status':'draft','good_detailed_status':['draft'],
-                           'brand_name':body['brand'],'identified_by':body['identified_by'],'good_attrs':[],'categories':[]}
+                seed=not body.get('good_name')
+                self.good={'good_id':902,'good_name':'AC/DC преобразователь RECOVER-2' if seed else body['good_name'],
+                           'good_status':'draft','good_detailed_status':['draft'],
+                           'tnved':'8504409100' if seed else body.get('tnved','8504409100'),
+                           'brand_name':'MORNSUN' if seed else body['brand'],
+                           'identified_by':body['identified_by'],
+                           'good_attrs':[{'attr_id':13933,'attr_name':'Код ТН ВЭД','attr_value':'8504409100'},
+                                         {'attr_id':13914,'attr_name':'Модель / артикул','attr_value':'RECOVER-2'}] if seed else [],
+                           'categories':[]}
             self.good['good_name']=body.get('good_name',self.good['good_name'])
             if 'categories' in body:
                 self.good['categories']=[{'cat_id':int(c),'cat_name':kind()['category']} for c in body['categories']]
@@ -101,7 +108,7 @@ def test_gtin_not_found_requires_pn_and_tnved(env):
     batch=preview(engine,'tester',xlsx([[gtin(45),'MORNSUN']]),'missing.xlsx')
     tick(engine)
     row=snapshot(store,batch['id'])['rows'][0]
-    assert row['state']=='need_data'
+    assert row['state']=='unregistered'
     assert remote.feeds==remote.allocations==0
 
 
@@ -148,3 +155,57 @@ def test_recovery_routes_admin_only(app):
         assert response.status_code==200,response.text
         id=response.json()['id']
         assert client.post('/api/admin/recovery-batches/'+id+'/start',json={'confirmed':False},headers=headers).status_code==422
+
+
+def test_two_column_absent_gtin_probes_feed_then_reads_gs1_data(env):
+    from nk_manager.gs1_probe import enqueue
+    store,svc,engine,*_=env
+    remote=RecoveryNK(present=False)
+    engine.client.transport=httpx.MockTransport(remote.handle)
+    data=xlsx([[gtin(45),'MORNSUN']])
+    batch=preview(engine,'tester',data,'probe.xlsx')
+    tick(engine)
+    assert snapshot(store,batch['id'])['rows'][0]['state']=='unregistered'
+    jobs=enqueue(engine,'tester',batch['id'],[2])
+    assert len(jobs)==1
+    assert store.one('SELECT kind FROM nk_jobs WHERE id=?',(jobs[0],))['kind']=='gs1_probe'
+    for _ in range(9):
+        tick(engine)
+    state=snapshot(store,batch['id'])
+    assert state['rows'][0]['state']=='ready',state
+    assert state['rows'][0]['pn']=='RECOVER-2'
+    assert state['rows'][0]['tnved']=='8504409100'
+    assert remote.feeds==1 and remote.allocations==0
+    assert not any(p=='/v3/feed-moderation' for _,p,_,_ in remote.requests)
+    assert not any(p=='/v3/generate-gtins' for _,p,_,_ in remote.requests)
+    start(engine,'tester',batch['id'],{'8504409100':kind()['id']})
+    for _ in range(9):
+        tick(engine)
+    result=snapshot(store,batch['id'])
+    assert result['rows'][0]['state']=='done',result
+    assert svc.get(result['rows'][0]['card_id'])['external_id']=='902'
+    assert remote.feeds==2
+
+
+def test_probe_is_not_retried_when_nk_rejects_minimal_feed(env):
+    from nk_manager.gs1_probe import enqueue
+    store,_,engine,*_=env
+    remote=RecoveryNK(present=False)
+    def reject(request):
+        if request.url.path=='/v3/feed':
+            remote.feeds+=1
+            return httpx.Response(422)
+        return remote.handle(request)
+    engine.client.transport=httpx.MockTransport(reject)
+    batch=preview(engine,'tester',xlsx([[gtin(45),'MORNSUN']]),'rejected.xlsx')
+    tick(engine)
+    enqueue(engine,'tester',batch['id'],[2])
+    for _ in range(4):tick(engine)
+    final=snapshot(store,batch['id'])
+    assert final['rows'][0]['state']=='probe_error'
+    assert remote.feeds==1
+    from nk_manager.service import Conflict
+    import pytest
+    with pytest.raises(Conflict):
+        enqueue(engine,'tester',batch['id'],[2])
+    assert remote.allocations==0
