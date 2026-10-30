@@ -29,6 +29,20 @@ async function main(){
  const signed=spawnSync(python,['-c',signCode,data],{encoding:'utf8',input:job.payload_base64});assert.equal(signed.status,0,signed.stderr);
  response=await page.request.post(origin+'/api/signer/result',{headers:auth,data:{id:job.id,lease:job.lease,sha256:job.sha256,thumbprint:thumb,signature:signed.stdout.trim()}});assert.equal(response.status(),200,await response.text());await waitJob('publish','confirmed');
  const cards=await(await page.request.get(origin+'/api/cards')).json();assert.equal(cards[0].external_status,'Опубликована');assert.equal(cards[0].external_id,'111');assert.equal(cards[0].attributes['Страна [#1]'],'FR');report.checks.push('Signer lease/hash/certificate protocol, software detached CMS and read-back publication confirmation');
- await page.locator('nav a[href="#batches"]').click();await visible('#nk-jobs-refresh');await page.screenshot({path:path.join(root,'docs/screenshots/nk-operations.png')});await page.locator('nav a[href="#admin"]').click();await visible('#nk-key');assert.equal(await page.locator('#nk-key').inputValue(),'');await page.screenshot({path:path.join(root,'docs/screenshots/nk-connection.png')});assert.deepEqual(report.errors,[]);report.status='passed';
+ await page.locator('nav a[href="#batches"]').click();await visible('#nk-jobs-refresh');await page.screenshot({path:path.join(root,'docs/screenshots/nk-operations.png')});await page.locator('nav a[href="#admin"]').click();await visible('#nk-key');assert.equal(await page.locator('#nk-key').inputValue(),'');await page.screenshot({path:path.join(root,'docs/screenshots/nk-connection.png')});
+ await page.locator('#nk-rebuild').click();
+ assert(await page.locator('#rebuild-confirm').isDisabled());
+ await page.locator('#rebuild-ack').check();
+ await page.locator('#rebuild-word').fill('СБРОСИТЬ');
+ assert(await page.locator('#rebuild-confirm').isEnabled());
+ await page.locator('#rebuild-confirm').click();
+ await waitJob('rebuild','confirmed');
+ const rebuilt=await(await page.request.get(origin+'/api/admin/nk/rebuild')).json();
+ assert.equal(rebuilt.job_state,'confirmed');
+ assert(rebuilt.backup.endsWith('.sqlite3'));
+ assert.equal(rebuilt.restored_cards,1);
+ assert.equal((await(await page.request.get(origin+'/api/cards')).json()).length,1);
+ report.checks.push('Guarded reset button, SQLite backup and verified atomic full NK rebuild in synthetic browser flow');
+ assert.deepEqual(report.errors,[]);report.status='passed';
 }
 main().catch(e=>{report.status='failed';report.error=e.stack;report.logs=logs.slice(-2000);process.exitCode=1;console.error(e);}).finally(async()=>{if(browser)await browser.close();if(child)child.kill('SIGTERM');fs.writeFileSync(path.join(root,'docs/nk-browser-report.json'),JSON.stringify(report,null,2)+'\n');fs.rmSync(dir,{recursive:true,force:true});console.log(JSON.stringify(report,null,2));});
