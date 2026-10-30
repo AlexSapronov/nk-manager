@@ -108,7 +108,7 @@ def pn_from_name(raw, kinds):
             tail = name[:-len(phrase)-1].strip()
         else:
             continue
-        if tail and not (re.search(r'\\s', tail) and re.search(r'[А-Яа-яЁё]{3,}', tail)):
+        if tail and not (re.search(r'\s', tail) and re.search(r'[А-Яа-яЁё]{3,}', tail)):
             candidates_found.append((len(phrase), tail))
     if not candidates_found:
         return ''
@@ -144,7 +144,7 @@ def scan(engine, row):
         raise Conflict('Статус карточки НК не подтверждён как редактируемый черновик')
     tnved = tnved_from(raw) if raw else ''
     pn = source_pn(raw) if raw else ''
-    if raw and not pn and re.fullmatch(r'\\d{10}', tnved):
+    if raw and not pn and re.fullmatch(r'\d{10}', tnved):
         pn = pn_from_name(raw, [k for k in catalog(engine.store) if k['tnved'] == tnved])
     if row['pn'] and pn and row['pn'] != pn:
         raise Conflict('PN из файла не совпадает с PN карточки НК')
