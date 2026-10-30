@@ -301,7 +301,16 @@ class Engine:
             audit(db, actor, "nk_snapshot", card_id, {"good_id": good_id, "local_preserved": bool(old and old["dirty"] and not force)})
         return card_id
 
-    def schema(self, cat_id):
+    def schema(self, cat_id, force=False):
+        if not force:
+            cached = self.store.one("SELECT body,updated FROM nk_schemas WHERE cat_id=?", (str(cat_id),))
+            if cached:
+                try:
+                    age = (datetime.now(timezone.utc)-datetime.fromisoformat(cached['updated'])).total_seconds()
+                    if 0 <= age < 6*3600:
+                        return json.loads(cached['body'])
+                except (TypeError,ValueError):
+                    pass
         body = self.client.call("GET", "/v3/attributes", {"cat_id": int(cat_id), "attr_type": "a"})
         if not isinstance(body, list):
             raise RemoteError("НК вернул неизвестную структуру атрибутов")
