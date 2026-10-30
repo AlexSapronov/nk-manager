@@ -105,7 +105,7 @@ class Client:
         return result["result"]
 
     def details(self, good_id=None, gtin=None):
-        result = self.call("GET", "/v3/feed-product", {"good_id": good_id} if good_id else {"gtin": gtin})
+        result = self.call("GET", "/v3/feed-product", {"good_ids": str(good_id)} if good_id else {"gtins": str(gtin)})
         if not isinstance(result, list) or not result:
             raise RemoteError("НК не вернул собственную карточку товара: проверьте её статус и права",404)
         if good_id:
@@ -113,7 +113,13 @@ class Client:
             if not matched:
                 raise RemoteError("НК вернул другую карточку")
             return matched[0]
-        return result[0]
+        matched = [raw for raw in result if any(
+            str(identifier.get('value') or '').zfill(14)==str(gtin).zfill(14)
+            for identifier in raw.get('identified_by',[])
+            if identifier.get('type')=='gtin' and identifier.get('level')=='trade-unit')]
+        if len(matched)!=1 or len(result)!=1:
+            raise RemoteError("НК вернул неоднозначную карточку по GTIN, требуется сверка")
+        return matched[0]
 
 
 def digest(value):
@@ -155,6 +161,8 @@ class Engine:
             db.executescript(SCHEMA)
             db.executescript(BULK_SCHEMA)
             db.executescript(RECOVERY_SCHEMA)
+            if 'probe_job' not in {col['name'] for col in db.execute('PRAGMA table_info(nk_recovery_rows)')}:
+                db.execute('ALTER TABLE nk_recovery_rows ADD COLUMN probe_job TEXT')
             db.executescript(REBUILD_SCHEMA)
             db.execute("UPDATE settings SET value='2' WHERE key='schema_version'")
         self.path = store.directory / "nk-secrets.json"
@@ -547,6 +555,9 @@ class Engine:
                 try:
                     if job["kind"] in ("sync","rebuild"):
                         self.sync_tick(job)
+                    elif job["kind"]=="gs1_probe":
+                        from .gs1_probe import tick as probe_tick
+                        probe_tick(self,job)
                     else:
                         self.operation_tick(job)
                 except RemoteError as error:
