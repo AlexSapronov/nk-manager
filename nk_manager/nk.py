@@ -558,8 +558,10 @@ class Engine:
             self.state(job["id"], "prepared", progress)
             return
         goods = listing.get("goods", [])
-        if not isinstance(goods,list) or not isinstance(listing.get('total'),int):
+        if not isinstance(goods,list) or type(listing.get('total')) is not int or listing['total']<0:
             raise RemoteError("НК не подтвердил полноту списка: отсутствует total или goods")
+        if not goods and offset < listing['total']:
+            raise RemoteError("НК вернул пустую страницу при ненулевом total; полная загрузка не подтверждена")
         raws = []
         for i in range(0,len(goods),25):
             chunk = goods[i:i+25]
