@@ -395,6 +395,13 @@ def create_app(data_directory=None):
         from nk_manager.gtin_recovery import start
         return start(nk,user['username'],id,data.get('kind_choices',{}),data.get('manufacturer_as_brand') is True)
 
+    @app.post("/api/admin/recovery-batches/{id}/probe")
+    def recovery_probe(id: str,data: dict,user=Depends(admin)):
+        if data.get('confirmed') is not True:
+            raise ValueError('Подтвердите пробное создание карточки с существующим GTIN')
+        from nk_manager.gs1_probe import enqueue
+        return {'jobs':enqueue(nk,user['username'],id,data.get('rows'))}
+
     @app.get("/api/admin/recovery-batches/{id}/export")
     def recovery_export(id: str,user=Depends(admin)):
         from nk_manager.gtin_recovery import export
