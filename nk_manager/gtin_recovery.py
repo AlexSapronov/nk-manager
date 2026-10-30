@@ -145,8 +145,12 @@ def scan(engine, row):
     gtin = row['gtin']
     raw = find_by_gtin(engine, gtin)
     if raw is None:
-        update(engine.store,row,state='unregistered',remote=None,
-               error='',pn=row['pn'],tnved=row['tnved'])
+        # A fully specified row can still use the existing, fully validated
+        # template-based creation route. Two-column GS1 files use the probe.
+        complete=bool(row['pn'] and re.fullmatch(r'\d{10}',row['tnved'])
+                      and any(k['tnved']==row['tnved'] for k in catalog(engine.store)))
+        update(engine.store,row,state='ready' if complete else 'unregistered',
+               remote=None,error='',pn=row['pn'],tnved=row['tnved'])
         return
     if raw and (raw.get('is_set') or raw.get('is_kit')):
         raise Conflict('Комплект или набор: автоматическое исправление не поддерживается')
