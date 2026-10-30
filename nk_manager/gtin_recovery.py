@@ -21,12 +21,15 @@ CREATE TABLE IF NOT EXISTS nk_recovery_rows(
  batch_id TEXT NOT NULL REFERENCES nk_recovery_batches(id), row_no INTEGER NOT NULL,
  gtin TEXT NOT NULL, manufacturer TEXT NOT NULL, pn TEXT NOT NULL, tnved TEXT NOT NULL,
  state TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', remote TEXT,
- card_id TEXT, save_job TEXT, repeat_of INTEGER,
+ card_id TEXT, save_job TEXT, probe_job TEXT, repeat_of INTEGER,
  PRIMARY KEY(batch_id,row_no)
 );
 """
 LABELS = {
     'scan': 'Проверяем в НК', 'ready': 'Можно восстановить', 'need_data': 'Нужны PN и ТН ВЭД',
+    'unregistered':'Нет карточки в НК · можно попробовать импорт GTIN',
+    'probing':'Пробуем создать в НК по ранее выданному GTIN',
+    'probe_error':'НК отклонил импорт · смотрите квитанцию',
     'exists': 'Уже опубликована', 'conflict': 'Требуется проверка', 'local': 'Готовим черновик',
     'queued': 'Отправляем черновик', 'done': 'Черновик сохранён в НК',
     'error': 'Ошибка', 'attention': 'Нужна сверка операции', 'repeat': 'Повтор GTIN'
@@ -117,24 +120,38 @@ def pn_from_name(raw, kinds):
     return next(iter(found)) if len(found) == 1 else ''
 
 
-def scan(engine, row):
-    from .nk import RemoteError, source_pn
-    gtin = row['gtin']
+def find_by_gtin(engine, gtin):
+    """Use the documented plural 'gtins' filter; a missing good is not an API error."""
+    from .nk import RemoteError
     try:
-        items = engine.client.call('GET', '/v3/feed-product', {'gtin': gtin})
+        items = engine.client.call('GET', '/v3/feed-product', {'gtins': gtin})
     except RemoteError as exc:
         if exc.code != 404:
             raise
         items = []
     if not isinstance(items, list):
-        raise ValueError('НК вернул неожиданный ответ при проверке GTIN')
-    matched = [r for r in items if any(
-        str(i.get('value') or '').zfill(14) == gtin.zfill(14)
-        for i in r.get('identified_by', [])
-        if i.get('type') == 'gtin' and i.get('level') == 'trade-unit')]
-    if len(matched) != len(items) or len(matched) > 1:
+        raise ValueError('НК вернул неожиданный формат ответа при проверке GTIN')
+    matches = [raw for raw in items if any(
+        str(item.get('value') or '').zfill(14) == gtin.zfill(14)
+        for item in raw.get('identified_by', [])
+        if item.get('type') == 'gtin' and item.get('level') == 'trade-unit')]
+    if len(matches) != len(items) or len(matches) > 1:
         raise Conflict('НК вернул неоднозначные карточки для GTIN; автоматическая обработка запрещена')
-    raw = matched[0] if matched else None
+    return matches[0] if matches else None
+
+
+def scan(engine, row):
+    from .nk import source_pn
+    gtin = row['gtin']
+    raw = find_by_gtin(engine, gtin)
+    if raw is None:
+        # A fully specified row can still use the existing, fully validated
+        # template-based creation route. Two-column GS1 files use the probe.
+        complete=bool(row['pn'] and re.fullmatch(r'\d{10}',row['tnved'])
+                      and any(k['tnved']==row['tnved'] for k in catalog(engine.store)))
+        update(engine.store,row,state='ready' if complete else 'unregistered',
+               remote=None,error='',pn=row['pn'],tnved=row['tnved'])
+        return
     if raw and (raw.get('is_set') or raw.get('is_kit')):
         raise Conflict('Комплект или набор: автоматическое исправление не поддерживается')
     if raw and (raw.get('good_status') == 'published' or 'published' in (raw.get('good_detailed_status') or [])):
@@ -236,7 +253,7 @@ def start(engine, actor, batch_id, choices, confirm_brand=False):
         batch = engine.store.one('SELECT * FROM nk_recovery_batches WHERE id=?', (batch_id,))
         if not batch:
             raise ValueError('Партия не найдена')
-        if batch['state'] == 'scanning':
+        if batch['state'] in ('scanning','probing'):
             raise Conflict('Дождитесь окончания проверки GTIN в НК')
         if batch['state'] != 'preview':
             return snapshot(engine.store, batch_id)
@@ -271,13 +288,30 @@ def start(engine, actor, batch_id, choices, confirm_brand=False):
 def advance(engine):
     """Read-only discovery, then durable NK save jobs. No second GTIN allocations."""
     store = engine.store
+    # Resolve durable GTIN-only bootstrap operations without re-sending them.
+    for row in store.all("SELECT * FROM nk_recovery_rows WHERE state='probing' ORDER BY row_no LIMIT 20"):
+        job=store.one('SELECT state,error,result FROM nk_jobs WHERE id=?',(row['probe_job'],))
+        if not job:
+            update(store,row,state='attention',error='Не найдено задание импорта; требуется ручная сверка')
+        elif job['state']=='confirmed':
+            update(store,row,state='scan',error='')
+        elif job['state'] in ('failed','cancelled'):
+            details=''
+            if job['result']:
+                answer=json.loads(job['result'])
+                details=str(answer.get('error_details') or answer.get('errors') or answer.get('message') or '') if isinstance(answer,dict) else ''
+            update(store,row,state='probe_error',error=(job['error'] or 'НК отклонил создание')+(' · '+details[:300] if details else ''))
+        elif job['state']=='unknown':
+            update(store,row,state='attention',error=job['error'] or 'Неизвестен исход создания; повторная отправка запрещена')
+    with store.transaction() as db:
+        db.execute("UPDATE nk_recovery_batches SET state='scanning' WHERE state='probing' AND NOT EXISTS(SELECT 1 FROM nk_recovery_rows r WHERE r.batch_id=nk_recovery_batches.id AND r.state='probing')")
     for row in store.all("SELECT * FROM nk_recovery_rows WHERE state='scan' ORDER BY row_no LIMIT 5"):
         try:
             scan(engine, row)
         except ValueError as exc:
             update(store, row, state='attention' if 'Соединение' in str(exc) or 'частоту' in str(exc) else 'conflict', error=str(exc))
     with store.transaction() as db:
-        db.execute("UPDATE nk_recovery_batches SET state='preview' WHERE state='scanning' AND NOT EXISTS(SELECT 1 FROM nk_recovery_rows r WHERE r.batch_id=nk_recovery_batches.id AND r.state='scan')")
+        db.execute("UPDATE nk_recovery_batches SET state='preview' WHERE state='scanning' AND NOT EXISTS(SELECT 1 FROM nk_recovery_rows r WHERE r.batch_id=nk_recovery_batches.id AND r.state IN ('scan','probing'))")
     for row in store.all("SELECT * FROM nk_recovery_rows WHERE state IN ('local','queued') ORDER BY row_no LIMIT 20"):
         if row['state'] == 'local':
             if row['save_job']:
@@ -292,13 +326,7 @@ def advance(engine):
                     job_id = previous['id']
                 else:
                     if not card['external_id']:
-                        from .nk import RemoteError
-                        try:
-                            checked = engine.client.call('GET', '/v3/feed-product', {'gtin': card['gtin']})
-                        except RemoteError as error:
-                            if error.code != 404:
-                                raise
-                            checked = []
+                        checked = find_by_gtin(engine,card['gtin'])
                         if checked:
                             raise Conflict('GTIN появился в НК после проверки. Отправка новой карточки остановлена')
                     job_id = engine.prepare(store.one('SELECT actor FROM nk_recovery_batches WHERE id=?',(row['batch_id'],))['actor'],
@@ -324,19 +352,21 @@ def snapshot(store, batch_id):
     batch = store.one('SELECT id,filename,state,actor,created FROM nk_recovery_batches WHERE id=?',(batch_id,))
     if not batch:
         raise ValueError('Партия не найдена')
-    rows = store.all('SELECT row_no,gtin,manufacturer,pn,tnved,state,error,card_id,save_job,repeat_of,remote FROM nk_recovery_rows WHERE batch_id=? ORDER BY row_no',(batch_id,))
+    rows = store.all('SELECT row_no,gtin,manufacturer,pn,tnved,state,error,card_id,save_job,probe_job,repeat_of,remote FROM nk_recovery_rows WHERE batch_id=? ORDER BY row_no',(batch_id,))
     by_no = {r['row_no']: r for r in rows}
     for r in rows:
         if r['repeat_of']:
             p = by_no.get(r['repeat_of'])
             if p:
-                for field in ('state','error','card_id','save_job','pn','tnved'):
+                for field in ('state','error','card_id','save_job','probe_job','pn','tnved'):
                     r[field] = p[field]
         r['nk_found'] = bool(r.pop('remote'))
         r['label'] = LABELS.get(r['state'], r['state'])
     batch['rows'] = rows
     batch['total'] = len(rows)
     batch['ready'] = sum(r['state'] == 'ready' for r in rows)
+    batch['unregistered'] = sum(r['state'] in ('unregistered','need_data') and not r['nk_found'] and not r.get('probe_job') and not r.get('repeat_of') for r in rows)
+    batch['probing'] = sum(r['state'] == 'probing' for r in rows)
     batch['groups'] = {code: [k for k in catalog(store) if k['tnved'] == code] for code in
                        sorted({r['tnved'] for r in rows if r['state'] == 'ready'})}
     return batch

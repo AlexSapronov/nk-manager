@@ -93,7 +93,24 @@ class Client:
             category = str((params or {}).get("cat_id", ""))
             if path == "/v3/attributes" and category.isdigit():
                 context += " " + category
-            raise RemoteError(f"НК вернул HTTP {response.status_code}: {context} ({method} {path}). Проверьте доступ и статус операции", response.status_code, retry)
+            detail = ""
+            if path == "/v3/feed":
+                # Keep actionable NK validation feedback without exposing
+                # credentials or replayable raw request/response dumps.
+                try:
+                    error_body = response.json()
+                    if isinstance(error_body,dict):
+                        message = next((error_body[k] for k in ("error_details","errors","error","message","detail")
+                                        if error_body.get(k)), None)
+                        if message is None and isinstance(error_body.get("result"),dict):
+                            body_result = error_body["result"]
+                            message = next((body_result[k] for k in ("error_details","errors","error","message")
+                                            if body_result.get(k)),None)
+                        if message:
+                            detail = " · " + (message if isinstance(message,str) else dumps(message)).replace(key,"[secret]")[:700]
+                except (ValueError,TypeError,KeyError):
+                    pass
+            raise RemoteError(f"НК вернул HTTP {response.status_code}: {context} ({method} {path}){detail}", response.status_code, retry)
         try:
             result = response.json()
         except ValueError:
@@ -105,7 +122,7 @@ class Client:
         return result["result"]
 
     def details(self, good_id=None, gtin=None):
-        result = self.call("GET", "/v3/feed-product", {"good_id": good_id} if good_id else {"gtin": gtin})
+        result = self.call("GET", "/v3/feed-product", {"good_ids": str(good_id)} if good_id else {"gtins": str(gtin)})
         if not isinstance(result, list) or not result:
             raise RemoteError("НК не вернул собственную карточку товара: проверьте её статус и права",404)
         if good_id:
@@ -113,7 +130,13 @@ class Client:
             if not matched:
                 raise RemoteError("НК вернул другую карточку")
             return matched[0]
-        return result[0]
+        matched = [raw for raw in result if any(
+            str(identifier.get('value') or '').zfill(14)==str(gtin).zfill(14)
+            for identifier in raw.get('identified_by',[])
+            if identifier.get('type')=='gtin' and identifier.get('level')=='trade-unit')]
+        if len(matched)!=1 or len(result)!=1:
+            raise RemoteError("НК вернул неоднозначную карточку по GTIN, требуется сверка")
+        return matched[0]
 
 
 def digest(value):
@@ -155,6 +178,8 @@ class Engine:
             db.executescript(SCHEMA)
             db.executescript(BULK_SCHEMA)
             db.executescript(RECOVERY_SCHEMA)
+            if 'probe_job' not in {col['name'] for col in db.execute('PRAGMA table_info(nk_recovery_rows)')}:
+                db.execute('ALTER TABLE nk_recovery_rows ADD COLUMN probe_job TEXT')
             db.executescript(REBUILD_SCHEMA)
             db.execute("UPDATE settings SET value='2' WHERE key='schema_version'")
         self.path = store.directory / "nk-secrets.json"
@@ -547,6 +572,9 @@ class Engine:
                 try:
                     if job["kind"] in ("sync","rebuild"):
                         self.sync_tick(job)
+                    elif job["kind"]=="gs1_probe":
+                        from .gs1_probe import tick as probe_tick
+                        probe_tick(self,job)
                     else:
                         self.operation_tick(job)
                 except RemoteError as error:
