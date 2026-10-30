@@ -27,6 +27,12 @@ def enqueue(engine, actor, batch_id, numbers):
             raise Conflict('Выбранные GTIN уже найдены, отправлены либо ранее проверялись. Повторная отправка запрещена')
         if engine.store.one("SELECT id FROM nk_jobs WHERE kind='rebuild' AND state NOT IN ('confirmed','failed','cancelled')"):
             raise Conflict('Сначала завершите перестройку каталога НК')
+        previously_tried={
+            str(json.loads(job['payload']).get('gtin') or '').zfill(14)
+            for job in engine.store.all("SELECT payload FROM nk_jobs WHERE kind='gs1_probe'")
+        }
+        if any(selected[n]['gtin'].zfill(14) in previously_tried for n in numbers):
+            raise Conflict('Этот GTIN уже отправлялся в попытке импорта, возможно в другой партии. Повторная отправка запрещена')
         result=[]
         # Atomic association and durable command. No calls to NK happen here.
         with engine.store.transaction() as db:
