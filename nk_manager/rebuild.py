@@ -111,10 +111,11 @@ def finish(engine, job):
         # A secondary guard protects against concurrent client writes during staging.
         if db.execute("SELECT COUNT(*) FROM nk_jobs WHERE id!=? AND state NOT IN ('confirmed','failed','cancelled')",(job['id'],)).fetchone()[0]:
             raise Conflict('Во время загрузки появилась другая операция НК. Локальная база не изменена')
-        for table in ('nk_receipts','nk_draft_followups','nk_creation_rows','nk_recovery_rows'):
+        # Immutable external receipts and operations remain in the audit archive.
+        # Deleting them would violate explicit immutability triggers and lose evidence.
+        for table in ('nk_draft_followups','nk_creation_rows','nk_recovery_rows'):
             if table in tables:
                 db.execute('DELETE FROM ' + table)
-        db.execute('DELETE FROM nk_jobs WHERE id!=?', (job['id'],))
         for table in ('nk_scopes','nk_snapshots','nk_cards','source_keys',
                       'nk_creation_batches','nk_recovery_batches',
                       'import_results','import_plans','imports','plans',
@@ -151,6 +152,7 @@ def finish(engine, job):
             db.execute('INSERT INTO nk_cards VALUES(?,?,?,?,?)',(card_id,good_id,dumps(raw),dumps(mapping),now()))
             db.execute('INSERT INTO nk_snapshots VALUES(?,?,?,?)',(card_id,digest(raw),dumps(raw),now()))
         # Leave a confirmed sync checkpoint for normal safe external operations.
+        # Historical NK jobs and receipts remain immutable for reconciliation.
         checkpoint = uid()
         payload = {'full_rebuild':job['id'],'count':count}
         db.execute("INSERT INTO nk_jobs(id,kind,card_id,revision,actor,op_key,payload,sha256,state,result,created,updated) VALUES(?,'sync',NULL,NULL,?,?,?,?,?,?,?,?)",
