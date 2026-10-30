@@ -93,7 +93,24 @@ class Client:
             category = str((params or {}).get("cat_id", ""))
             if path == "/v3/attributes" and category.isdigit():
                 context += " " + category
-            raise RemoteError(f"НК вернул HTTP {response.status_code}: {context} ({method} {path}). Проверьте доступ и статус операции", response.status_code, retry)
+            detail = ""
+            if path == "/v3/feed":
+                # Keep actionable NK validation feedback without exposing
+                # credentials or replayable raw request/response dumps.
+                try:
+                    error_body = response.json()
+                    if isinstance(error_body,dict):
+                        message = next((error_body[k] for k in ("error_details","errors","error","message","detail")
+                                        if error_body.get(k)), None)
+                        if message is None and isinstance(error_body.get("result"),dict):
+                            body_result = error_body["result"]
+                            message = next((body_result[k] for k in ("error_details","errors","error","message")
+                                            if body_result.get(k)),None)
+                        if message:
+                            detail = " · " + (message if isinstance(message,str) else dumps(message)).replace(key,"[secret]")[:700]
+                except (ValueError,TypeError,KeyError):
+                    pass
+            raise RemoteError(f"НК вернул HTTP {response.status_code}: {context} ({method} {path}){detail}", response.status_code, retry)
         try:
             result = response.json()
         except ValueError:
