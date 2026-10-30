@@ -36,7 +36,7 @@ function leave(){return !state.dirty||window.confirm('Есть несохран�
 async function reloadCards(force=false){
  const marker=await api('/api/workspace/version');
  if(!force&&state.workspaceVersion===marker.version)return false;
- const [cards,workspace]=await Promise.all([api('/api/cards'),api('/api/drafts/workspace')]);
+ const [cards,workspace]=await Promise.all([api('/api/cards/summary'),api('/api/drafts/workspace')]);
  state.cards=cards;state.draftWorkspace=workspace;state.workspaceVersion=marker.version;if(!state.showPublishedDrafts){const hidden=new Set(workspace.entries.filter(e=>e.published_ids.length).map(e=>e.id));state.selected=new Set([...state.selected].filter(id=>!hidden.has(id)));}return true;}
 async function render(){
  $('#nav').innerHTML=Object.keys(labels).filter(p=>p!=='admin'||state.user.admin).map(p=>`<a href="#${p}" class="${p===state.page?'active':''}"><span>${icons[p]}</span><span class="nav-label">${labels[p]}</span></a>`).join('');$('#breadcrumb').textContent=labels[state.page];
@@ -71,7 +71,16 @@ function exportDialog(ids){
  bind('#download-zip',()=>download('/api/export?format=zip&'+params,'nk-catalog-analysis.zip'));bind('#download-xlsx',()=>download('/api/export?format=xlsx&'+params,'nk-catalog-analysis.xlsx'));
 }
 async function download(url,name){const response=await fetch(url);if(!response.ok)throw new Error('Не удалось выгрузить файл. Проверьте сессию.');const blob=await response.blob();const anchor=document.createElement('a');anchor.href=URL.createObjectURL(blob);anchor.download=name;anchor.click();setTimeout(()=>URL.revokeObjectURL(anchor.href),30000);toast('Файл сформирован.');}
-function openCard(id){if(!leave())return;state.allAttributeFields=false;state.drawer=id?structuredClone(state.cards.find(c=>c.id===id)):{id:null,pn:'',gtin:'',name:'',tnved:'',category:'',card_type:'',attributes:{},owner:state.user.username,revision:0,source:'local',external_status:null};state.dirty=false;state.tab='main';drawCard();}
+async function openCard(id){
+ if(!leave())return;
+ try{
+  // Full attributes and official NK snapshots are loaded only when needed.
+  const card=id?await api('/api/cards/'+encodeURIComponent(id)):
+   {id:null,pn:'',gtin:'',name:'',tnved:'',category:'',card_type:'',attributes:{},owner:state.user.username,revision:0,source:'local',external_status:null};
+  if(state.dirty&&!leave())return;
+  state.allAttributeFields=false;state.drawer=card;state.dirty=false;state.tab='main';await drawCard();
+ }catch(error){showError(error);}
+}
 function capture(){if(!state.drawer)return;$$('[data-field]',$('#drawer')).forEach(i=>state.drawer[i.dataset.field]=i.value);$$('[data-attribute]',$('#drawer')).forEach(i=>state.drawer.attributes[i.dataset.attribute]=i.value);CreationUI.syncName(state.drawer);}
 function field(key,label,value,readonly=false){return `<label class="field">${label}<input data-field="${key}" id="field-${key}" value="${esc(value)}" ${readonly?'readonly':''}></label>`;}
 async function drawCard(){
