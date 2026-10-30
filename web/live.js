@@ -152,13 +152,13 @@ function setupAdminSections(){
  const switchTo=id=>{
    state.adminTab=id;
    for(const section of sections)section.hidden=section.dataset.adminGroup!==id;
-   $('[data-admin-tab]',nav).forEach(button=>{
+   $$('[data-admin-tab]',nav).forEach(button=>{
      const active=button.dataset.adminTab===id;
      button.classList.toggle('active',active);
      button.setAttribute('aria-pressed',String(active));
    });
  };
- $('[data-admin-tab]',nav).forEach(button=>button.onclick=()=>switchTo(button.dataset.adminTab));
+ $$('[data-admin-tab]',nav).forEach(button=>button.onclick=()=>switchTo(button.dataset.adminTab));
  switchTo(state.adminTab||'connection');
 }
 function showTemporaryCode(result){
