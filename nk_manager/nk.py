@@ -687,6 +687,8 @@ class Engine:
 
     @staticmethod
     def matches_entry(entry,raw):
+        if entry.get("categories") and not set(map(str,entry["categories"])).issubset({str(x.get("cat_id")) for x in raw.get("categories",[])}):
+            return False
         if entry.get("good_name") and entry["good_name"]!=raw.get("good_name"):
             return False
         for attr in entry.get("good_attrs",[]):
