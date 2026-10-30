@@ -122,3 +122,12 @@ dialog.template-dialog { max-width: 1120px; width: calc(100% - 32px); }
 .bulk-kind-choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px}.bulk-kind-choices select{max-width:100%;width:100%}#bulk-creation input[type=file]{max-width:100%}#dialog [data-bulk-id] td{overflow-wrap:anywhere}#bulk-export{display:inline-flex;align-items:center;text-decoration:none}
 
 #dialog [data-bulk-id] table{white-space:normal;min-width:620px}#dialog [data-bulk-id] th{white-space:normal}#dialog [data-bulk-id] td{white-space:normal}#bulk-export{padding:9px 13px;border:1px solid var(--blue);border-radius:7px;background:var(--primary);color:var(--primary-ink);font-weight:550}
+
+/* Admin desktop navigation: one task group at a time. */
+.admin-tabs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px;margin:0 0 20px;border:1px solid var(--border,#d9e0e4);border-radius:12px}
+.admin-tabs button{min-width:142px;flex:1;border-radius:8px;min-height:40px;white-space:nowrap}
+.admin-tabs button.active{font-weight:700;background:var(--accent,#235969);color:#fff}
+[data-admin-group][hidden]{display:none!important}
+.nk-danger-zone{border-top:1px solid var(--border,#d9e0e4);margin-top:24px;padding-top:18px}
+.nk-danger-zone h3{margin-top:0}
+.nk-danger-zone button{min-height:40px}

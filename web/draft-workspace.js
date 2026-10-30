@@ -1,7 +1,14 @@
 /* Four clear stages. Local preparation is quiet; external actions have one confirmation. */
 window.DraftUI = (() => {
  const stages=[['prepare','1. Заполнить'],['ready','2. Отправить'],['moderation','3. Модерация'],['sign','4. Подписать'],['processing','Выполняется'],['attention','Нужно действие']];
- const meta=id=>state.draftWorkspace?.entries.find(e=>e.id===id);
+ let indexSource=null,index=new Map();
+ const meta=id=>{
+  if(indexSource!==state.draftWorkspace){
+   indexSource=state.draftWorkspace;
+   index=new Map((indexSource?.entries||[]).map(e=>[e.id,e]));
+  }
+  return index.get(id);
+ };
  const hidden=c=>!!meta(c.id)?.published_ids.length;
  function scope(){const q=state.query.toLocaleLowerCase();return state.cards.filter(c=>meta(c.id)&&(!q||[c.pn,c.name,c.gtin].some(v=>v.toLocaleLowerCase().includes(q)))&&(!state.category||c.category===state.category)&&(!state.tnved||c.tnved===state.tnved));}
  function visible(){return scope().filter(c=>state.showPublishedDrafts||!hidden(c));}

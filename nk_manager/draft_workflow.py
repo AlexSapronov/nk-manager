@@ -38,6 +38,10 @@ def workspace(service,actor):
     latest={}
     for j in service.store.all("SELECT id,card_id,kind,state,error,result,revision FROM nk_jobs WHERE card_id IS NOT NULL ORDER BY created"):
         latest[j['card_id']]=j
+    # The old candidates() scan was O(cards²) for the entire draft workspace.
+    from collections import Counter
+    pn_counts=Counter(c['pn'].strip() for c in cards if c['pn'].strip())
+    gtin_counts=Counter(c['gtin'].zfill(14) for c in cards if c['gtin'])
     entries=[]
     for c in cards:
         if c['archived'] or published(c):continue
@@ -48,7 +52,7 @@ def workspace(service,actor):
         proposal=propose(c,kinds) if draft else None
         pn=c['pn'].strip() or (proposal['after']['pn'] if proposal else '')
         hidden=index.get(pn,[]) if draft and pn else []
-        row={'id':c['id'],'stage':'prepare','action':'edit','missing':[],'automatic_changes':0,'published_ids':hidden,'job_id':None,'error':'','label':'','external_duplicate':c['id'] not in known_ids and bool(candidates(c['pn'],c['gtin'],cards,c['id']))}
+        row={'id':c['id'],'stage':'prepare','action':'edit','missing':[],'automatic_changes':0,'published_ids':hidden,'job_id':None,'error':'','label':'','external_duplicate':c['id'] not in known_ids and (bool(c['pn'].strip() and pn_counts[c['pn'].strip()]>1) or bool(c['gtin'] and gtin_counts[c['gtin'].zfill(14)]>1))}
         if draft:
             row['missing']=[i for i in proposal['issues'] if not (i=='Выберите тип переменной характеристики' and 'Выберите вид товара' in proposal['issues'])];row['automatic_changes']=len(proposal['changes'])
             if not row['missing'] and not row['automatic_changes']:row.update(stage='ready',action='submit',label='Готова к отправке')
