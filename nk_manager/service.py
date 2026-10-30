@@ -67,6 +67,23 @@ class Service:
     def cards(self):
         return [card_record(row) for row in self.store.all("SELECT * FROM cards ORDER BY updated DESC,id")]
 
+    def summaries(self):
+        """Desktop registry index without large raw NK snapshots/attribute blobs."""
+        fields = ("id","external_id","source","external_status","pn","gtin",
+                  "tnved","category","card_type","name","revision","owner",
+                  "archived","dirty","updated")
+        rows = self.store.all("SELECT "+",".join(fields)+",attributes,source_snapshot FROM cards ORDER BY updated DESC,id")
+        results=[]
+        for row in rows:
+            attrs=json.loads(row.pop("attributes"))
+            snapshot=json.loads(row.pop("source_snapshot"))
+            # Keep the two values consumed by the bulk action preview UI.
+            row["attributes"]={k:v for k,v in attrs.items() if "[#2504]" in k and not k.endswith("::unit")}
+            creation=snapshot.get("creation")
+            row["source_snapshot"]={"creation":creation} if creation else {}
+            results.append(row)
+        return results
+
     def get(self, id):
         row = self.store.one("SELECT * FROM cards WHERE id=?", (id,))
         if not row:
