@@ -96,6 +96,27 @@ def tnved_from(raw):
                  if str(a.get('attr_id')) == '13933'), str(raw.get('tnved') or '').strip())
 
 
+def pn_from_name(raw, kinds):
+    """Only extract an exact PN bordering a known product-kind phrase."""
+    name = str(raw.get('good_name') or '').strip()
+    candidates_found = []
+    for kind in kinds:
+        phrase = kind['name']
+        if name.startswith(phrase + ' '):
+            tail = name[len(phrase)+1:].strip()
+        elif name.endswith(' ' + phrase):
+            tail = name[:-len(phrase)-1].strip()
+        else:
+            continue
+        if tail and not (re.search(r'\\s', tail) and re.search(r'[А-Яа-яЁё]{3,}', tail)):
+            candidates_found.append((len(phrase), tail))
+    if not candidates_found:
+        return ''
+    longest = max(length for length, _ in candidates_found)
+    found = {pn for length, pn in candidates_found if length == longest}
+    return next(iter(found)) if len(found) == 1 else ''
+
+
 def scan(engine, row):
     from .nk import RemoteError, source_pn
     gtin = row['gtin']
@@ -121,17 +142,17 @@ def scan(engine, row):
         return
     if raw and not set(raw.get('good_detailed_status') or [raw.get('good_status')]) & {'draft', 'errors'}:
         raise Conflict('Статус карточки НК не подтверждён как редактируемый черновик')
-    pn = source_pn(raw) if raw else ''
     tnved = tnved_from(raw) if raw else ''
+    pn = source_pn(raw) if raw else ''
+    if raw and not pn and re.fullmatch(r'\\d{10}', tnved):
+        pn = pn_from_name(raw, [k for k in catalog(engine.store) if k['tnved'] == tnved])
     if row['pn'] and pn and row['pn'] != pn:
         raise Conflict('PN из файла не совпадает с PN карточки НК')
     if row['tnved'] and tnved and row['tnved'] != tnved:
         raise Conflict('ТН ВЭД файла не совпадает с ТН ВЭД карточки НК')
     pn = pn or row['pn']
     tnved = tnved if re.fullmatch(r'\d{10}', tnved) else row['tnved']
-    if raw and raw.get('brand_name') and str(raw['brand_name']).strip().casefold() != row['manufacturer'].casefold():
-        # A manufacturer is not necessarily a trademark. Keep the NK trademark.
-        pass
+    # Manufacturer is not always the trademark: preserve the brand already held by NK.
     if not pn or not re.fullmatch(r'\d{10}', tnved):
         update(engine.store, row, state='need_data', pn=pn, tnved=tnved,
                remote=dumps(raw) if raw else None,
@@ -177,7 +198,7 @@ def build_local(engine, actor, row, kind_id, confirm_brand):
             raise Conflict('У карточки уже есть локальные изменения')
         attrs = dict(current['attributes'])
         for k, v in d['attributes'].items():
-            if not v:
+            if not v or k.endswith('::unit'):
                 continue
             marker = re.search(r'\[#(\d+)\]', k)
             if not marker:
