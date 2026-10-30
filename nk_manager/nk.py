@@ -133,9 +133,11 @@ class Engine:
     def __init__(self, store, transport=None):
         self.store = store
         from .bulk_creation import SCHEMA as BULK_SCHEMA
+        from .gtin_recovery import SCHEMA as RECOVERY_SCHEMA
         with store.connect() as db:
             db.executescript(SCHEMA)
             db.executescript(BULK_SCHEMA)
+            db.executescript(RECOVERY_SCHEMA)
             db.execute("UPDATE settings SET value='2' WHERE key='schema_version'")
         self.path = store.directory / "nk-secrets.json"
         self.client = Client(self.config, transport)
@@ -338,9 +340,20 @@ class Engine:
                     raise Conflict("Снимок НК изменился после локальных правок. Сравните версии перед отправкой")
                 categories = raw.get("categories", [])
                 cat_id = categories[0]["cat_id"] if categories else None
-                if card["category"] != (categories[0].get("cat_name", "") if categories else "") or card["card_type"] != "unit":
-                    raise ValueError("Изменение категории или типа существующей карточки требует отдельной процедуры НК")
+                # A GS1-derived draft can have no category at all (NK UI asks to select it).
+                # Only in that case may we add one verified category; never replace an existing one.
+                missing_category = not categories
+                if missing_category:
+                    scope = self.store.one("SELECT cat_id FROM nk_scopes WHERE card_id=?", (card_id,))
+                    cat_id = str(scope["cat_id"]) if scope else ""
+                    if (not cat_id.isdigit() or not card["category"] or
+                            not set(raw.get("good_detailed_status") or [raw.get("good_status")]) & {"draft", "errors"}):
+                        raise Conflict("Для GS1-черновика без категории выберите вид товара и подтвердите ID категории")
+                if (not missing_category and card["category"] != categories[0].get("cat_name", "")) or card["card_type"] != "unit":
+                    raise ValueError("Изменение существующей категории или типа карточки требует отдельной процедуры НК")
                 entry = {"good_id": int(raw["good_id"]), "moderation": 0, "good_attrs": []}
+                if missing_category:
+                    entry["categories"] = [int(cat_id)]
                 mapping = json.loads(known["field_map"])
                 for key, attr in mapping.items():
                     value = card["attributes"].get(key, str(attr.get("attr_value") or ""))
@@ -402,7 +415,7 @@ class Engine:
                     entry["good_attrs"].append(attr)
             if not cat_id:
                 raise ValueError("У карточки отсутствует подтверждённая категория")
-            schema = self.card_schema(categories) if raw else self.schema(cat_id)
+            schema = self.card_schema(categories) if raw and categories else self.schema(cat_id)
             allowed = {str(a["attr_id"]):a for a in schema}
             for attr in entry["good_attrs"]:
                 definition = allowed.get(str(attr["attr_id"]))
@@ -420,8 +433,10 @@ class Engine:
                             raise ValueError("Не конечное число")
                     except (ValueError,InvalidOperation):
                         raise ValueError("Атрибут должен быть числом: "+definition["attr_name"]) from None
-            if not raw:
+            if not raw or (raw and not raw.get("categories")):
                 present={str(a["attr_id"]) for a in entry["good_attrs"] if str(a.get("attr_value","")).strip()}
+                if raw:
+                    present.update(str(a["attr_id"]) for a in raw.get("good_attrs",[]) if str(a.get("attr_value") or "").strip())
                 # These top-level feed fields are expanded by NK itself. In
                 # particular its documented 10-digit tnved populates 13933.
                 if entry.get("good_name"):
@@ -504,6 +519,8 @@ class Engine:
             advance(self)
             from .bulk_creation import advance as advance_creation
             advance_creation(self)
+            from .gtin_recovery import advance as advance_recovery
+            advance_recovery(self)
 
     def sync_tick(self, job):
         payload = json.loads(job["payload"])
@@ -670,6 +687,14 @@ class Engine:
 
     @staticmethod
     def matches_entry(entry,raw):
+        if entry.get("gtin") and not any(
+            str(i.get("value") or "").zfill(14) == str(entry["gtin"]).zfill(14)
+            for i in raw.get("identified_by",[])
+            if i.get("type")=="gtin" and i.get("level")=="trade-unit"
+        ):
+            return False
+        if entry.get("categories") and not set(map(str,entry["categories"])).issubset({str(x.get("cat_id")) for x in raw.get("categories",[])}):
+            return False
         if entry.get("good_name") and entry["good_name"]!=raw.get("good_name"):
             return False
         for attr in entry.get("good_attrs",[]):
