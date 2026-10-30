@@ -133,9 +133,11 @@ class Engine:
     def __init__(self, store, transport=None):
         self.store = store
         from .bulk_creation import SCHEMA as BULK_SCHEMA
+        from .rebuild import SCHEMA as REBUILD_SCHEMA
         with store.connect() as db:
             db.executescript(SCHEMA)
             db.executescript(BULK_SCHEMA)
+            db.executescript(REBUILD_SCHEMA)
             db.execute("UPDATE settings SET value='2' WHERE key='schema_version'")
         self.path = store.directory / "nk-secrets.json"
         self.client = Client(self.config, transport)
@@ -188,9 +190,11 @@ class Engine:
         config = self.config()
         sync = self.store.one("SELECT * FROM nk_jobs WHERE kind='sync' ORDER BY created DESC LIMIT 1")
         heartbeat = self.store.one("SELECT value FROM settings WHERE key='nk_signer_heartbeat'")
+        from .rebuild import status as rebuild_status
         return {"configured": bool(config.get("api_key")), "environment": config.get("environment", "production"),
                 "writes_enabled": config.get("writes_enabled", False), "thumbprint": config.get("thumbprint", ""),
                 "sync": {k: sync[k] for k in ("id", "state", "error", "updated")} if sync else None,
+                "rebuild": rebuild_status(self.store),
                 "signer": json.loads(heartbeat["value"]) if heartbeat else None,
                 "jobs": self.store.all("SELECT id,kind,card_id,state,error,external_id,created,updated FROM nk_jobs ORDER BY created DESC LIMIT 200")}
 
@@ -208,13 +212,34 @@ class Engine:
             audit(db, actor, "nk_queued", id, {"kind": kind, "card_id": card["id"] if card else None})
         return id
 
-    def sync(self, actor):
+    def sync(self, actor, full=False):
         if not self.config().get("api_key"):
             raise ValueError("Сначала настройте API KEY")
-        active = self.store.one("SELECT id FROM nk_jobs WHERE kind='sync' AND state NOT IN ('failed','confirmed','cancelled')")
-        if active:
-            return active["id"]
-        return self.enqueue(actor, "sync", {"from": "2000-01-01 00:00:00", "to": (datetime.now(timezone.utc)+timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")})
+        from .rebuild import running
+        with self.lock:
+            if running(self.store):
+                raise Conflict("Выполняется полная перестройка каталога. Дождитесь завершения")
+            active = self.store.one("SELECT id FROM nk_jobs WHERE kind='sync' AND state NOT IN ('failed','confirmed','cancelled')")
+            if active:
+                return active["id"]
+            latest = self.store.one("SELECT * FROM nk_jobs WHERE kind='sync' AND state='confirmed' ORDER BY created DESC LIMIT 1")
+            if not full and latest and (datetime.now(timezone.utc)-datetime.fromisoformat(latest['updated'])).total_seconds()<300:
+                return latest['id']
+            end = (datetime.now(timezone.utc)+timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+            beginning = '2000-01-01 00:00:00'
+            mode = 'full'
+            if not full and latest:
+                try:
+                    previous = json.loads(latest['payload'])
+                    if previous.get('full_rebuild'):
+                        previous_end = datetime.fromisoformat(latest['updated'].replace('+00:00','')).replace(tzinfo=timezone.utc)
+                    else:
+                        previous_end = datetime.strptime(previous['to'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+                    beginning = max(datetime(2000,1,1,tzinfo=timezone.utc),previous_end-timedelta(days=2)).strftime('%Y-%m-%d %H:%M:%S')
+                    mode = 'recent'
+                except (KeyError,ValueError,TypeError):
+                    beginning = '2000-01-01 00:00:00'
+            return self.enqueue(actor, "sync", {"from": beginning, "to": end, "mode": mode})
 
     def apply_remote(self, raw, actor="nk", card_id=None, force=False):
         good_id = int(raw["good_id"])
@@ -480,7 +505,7 @@ class Engine:
             jobs = self.store.all("SELECT * FROM nk_jobs WHERE state IN ('prepared','signed') AND next_at<=? ORDER BY created LIMIT 5", (time.time(),))+self.store.all("SELECT * FROM nk_jobs WHERE state IN ('submitted','checking') AND next_at<=? ORDER BY updated LIMIT 5",(time.time(),))
             for job in jobs:
                 try:
-                    if job["kind"] == "sync":
+                    if job["kind"] in ("sync","rebuild"):
                         self.sync_tick(job)
                     else:
                         self.operation_tick(job)
@@ -489,9 +514,9 @@ class Engine:
                     if current["state"] == "dispatching":
                         rejected=error.code in (400,401,403,404,413,422,429)
                         self.state(job["id"], "failed" if rejected else "unknown", error=str(error))
-                    elif job["kind"] == "sync" and error.code in (401,403,404):
+                    elif job["kind"] in ("sync","rebuild") and error.code in (401,403,404):
                         self.state(job["id"],"failed",error=str(error))
-                    elif job["kind"] == "sync" or job["state"] in ("submitted","checking"):
+                    elif job["kind"] in ("sync","rebuild") or job["state"] in ("submitted","checking"):
                         self.state(job["id"], "prepared" if job["kind"]=="sync" else job["state"], error=str(error), next_at=time.time()+error.retry)
                     else:
                         current = self.store.one("SELECT state FROM nk_jobs WHERE id=?", (job["id"],))
@@ -506,14 +531,22 @@ class Engine:
             advance_creation(self)
 
     def sync_tick(self, job):
+        """Refresh only changed windows; full rebuild stages without touching live cards."""
+        from .rebuild import stage as rebuild_stage, finish as rebuild_finish
+        rebuild = job['kind'] == 'rebuild'
         payload = json.loads(job["payload"])
         progress = json.loads(job["result"]) if job["result"] else {"windows":[[payload["from"],payload["to"],0]],"count":0}
         if not progress["windows"]:
-            self.state(job["id"], "confirmed", progress)
+            if rebuild:
+                result = rebuild_finish(self, job)
+                self.state(job["id"], "confirmed", {"count":result["count"],"backup":result["backup"]})
+            else:
+                self.state(job["id"], "confirmed", progress)
             return
         start,end,offset = progress["windows"][0]
         try:
-            listing = self.client.call("GET", "/v4/product-list", {"from_date":start,"to_date":end,"offset":offset,"limit":25})
+            listing = self.client.call("GET", "/v4/product-list",
+                                       {"from_date":start,"to_date":end,"offset":offset,"limit":100})
         except RemoteError as error:
             if error.code != 413:
                 raise
@@ -525,17 +558,31 @@ class Engine:
             self.state(job["id"], "prepared", progress)
             return
         goods = listing.get("goods", [])
-        details=self.client.call("GET","/v3/feed-product",{"good_ids":";".join(str(item["good_id"]) for item in goods)}) if goods else []
-        if not isinstance(details,list) or {str(item["good_id"]) for item in details}!={str(item["good_id"]) for item in goods}:
-            raise RemoteError("НК не вернул полный состав запрошенных карточек. Проверьте права и статусы",404)
-        for raw in details:
-            self.apply_remote(raw)
+        if not isinstance(goods,list) or not isinstance(listing.get('total'),int):
+            raise RemoteError("НК не подтвердил полноту списка: отсутствует total или goods")
+        raws = []
+        for i in range(0,len(goods),25):
+            chunk = goods[i:i+25]
+            details = self.client.call("GET","/v3/feed-product",
+                                       {"good_ids":";".join(str(item["good_id"]) for item in chunk)})
+            if not isinstance(details,list) or {str(item["good_id"]) for item in details}!={str(item["good_id"]) for item in chunk}:
+                raise RemoteError("НК не вернул полный состав запрошенных карточек. Проверьте права и статусы",404)
+            raws.extend(details)
+        if rebuild:
+            rebuild_stage(self.store,job['id'],raws)
+        else:
+            for raw in raws:
+                current = self.store.one("SELECT 1 FROM nk_cards WHERE good_id=? AND raw=?",
+                                         (int(raw['good_id']),dumps(raw)))
+                if not current:
+                    self.apply_remote(raw)
         progress["count"] += len(goods)
-        if not goods or offset+len(goods) >= int(listing.get("total",offset+len(goods))):
+        if not goods or offset+len(goods) >= listing["total"]:
             progress["windows"].pop(0)
         else:
             progress["windows"][0][2] += len(goods)
-        self.state(job["id"], "prepared" if progress["windows"] else "confirmed", progress, next_at=time.time()+2)
+        self.state(job["id"], "prepared" if progress["windows"] else "confirmed" if not rebuild else "prepared",
+                   progress, next_at=time.time()+2)
 
     def operation_tick(self, job):
         config = self.config()
