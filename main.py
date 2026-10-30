@@ -527,7 +527,8 @@ def create_app(data_directory=None):
 
     @app.get("/api/nk/schema/{cat_id}")
     def nk_schema(cat_id: int, user=Depends(session)):
-        return nk.schema(cat_id)
+        # Explicit user refresh always obtains the current official schema.
+        return nk.schema(cat_id,force=True)
 
     @app.post("/api/nk/prepare/{kind}")
     def nk_prepare(kind: str, data: dict, user=Depends(session)):
