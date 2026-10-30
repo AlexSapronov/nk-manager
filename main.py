@@ -113,7 +113,7 @@ def create_app(data_directory=None):
                 return JSONResponse({"detail": "Проверка Origin не пройдена"}, status_code=403)
             if not request.headers.get("content-length", "").isdigit():
                 return JSONResponse({"detail": "Требуется Content-Length"}, status_code=411)
-        if request.url.path in ("/api/import/preview", "/api/admin/creation-batches/preview"):
+        if request.url.path in ("/api/import/preview", "/api/admin/creation-batches/preview", "/api/admin/recovery-batches/preview"):
             length = request.headers.get("content-length", "")
             if not length.isdigit() or int(length) > 21 * 1024 * 1024:
                 return JSONResponse({"detail": "Загрузка: нужен Content-Length, максимум 20 МБ файла"}, status_code=413)
@@ -366,6 +366,39 @@ def create_app(data_directory=None):
     def export_creation_batch(id: str,user=Depends(admin)):
         from nk_manager.bulk_creation import export
         return Response(export(store,id),media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':'attachment; filename="nk-cards-gtin.xlsx"'})
+
+    @app.get("/api/admin/recovery-batches")
+    def recovery_batches(user=Depends(admin)):
+        return store.all("SELECT id,filename,state,created FROM nk_recovery_batches ORDER BY created DESC LIMIT 100")
+
+    @app.post("/api/admin/recovery-batches/preview")
+    async def recovery_preview(file: UploadFile = File(...), user=Depends(admin)):
+        if not str(file.filename).lower().endswith('.xlsx'):
+            raise ValueError('Нужен файл XLSX')
+        content = await file.read(20*1024*1024+1)
+        await file.close()
+        if len(content)>20*1024*1024:
+            raise HTTPException(413,'Файл превышает 20 МБ')
+        from nk_manager.gtin_recovery import preview
+        filename=str(file.filename).replace('\\','/').split('/')[-1][:200]
+        return await run_in_threadpool(preview,nk,user['username'],content,filename)
+
+    @app.get("/api/admin/recovery-batches/{id}")
+    def recovery_batch(id: str,user=Depends(admin)):
+        from nk_manager.gtin_recovery import snapshot
+        return snapshot(store,id)
+
+    @app.post("/api/admin/recovery-batches/{id}/start")
+    def recovery_start(id: str,data: dict,user=Depends(admin)):
+        if data.get('confirmed') is not True:
+            raise ValueError('Подтвердите сохранение черновиков в Национальном каталоге')
+        from nk_manager.gtin_recovery import start
+        return start(nk,user['username'],id,data.get('kind_choices',{}),data.get('manufacturer_as_brand') is True)
+
+    @app.get("/api/admin/recovery-batches/{id}/export")
+    def recovery_export(id: str,user=Depends(admin)):
+        from nk_manager.gtin_recovery import export
+        return Response(export(store,id),media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':'attachment; filename="nk-gtin-recovery.xlsx"'})
 
     @app.get("/api/export")
     def export(format: str = "zip", ids: str = "", user=Depends(session)):
