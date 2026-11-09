@@ -34,7 +34,7 @@ class NK:
         if path==self.timeout_path:
             raise httpx.ReadTimeout("secret URL must never leak",request=request)
         if path=="/v4/product-list":
-            result={"total":1,"goods":[{"good_id":111}]}
+            result={"total":1,"goods":[{"good_id":self.raw["good_id"]}]}
         elif path=="/v3/feed-product":
             result=[copy.deepcopy(self.raw)]
         elif path=="/v3/attributes":
@@ -287,14 +287,25 @@ def test_cms_and_lease_protection(env):
     assert store.one("SELECT state FROM nk_jobs WHERE id=?",(id,))["state"]=="signing"
 
 
-def test_create_uses_provided_gtin_and_confirmed_remote_id(env):
+def test_create_keeps_local_card_when_sync_sees_gtin_before_feed_confirmation(env):
     store,service,engine,remote,*_=env
     c=service.save("tester",{"pn":"INDEPENDENT-MODEL","name":"Другой товар","gtin":"04640000000028","tnved":"8536901000","card_type":"unit","attributes":{"Модель / артикул [#2]":"INDEPENDENT-MODEL"}})
     id=engine.prepare("tester","save",c["id"],c["revision"],{"cat_id":123,"brand":"BRAND"})
-    tick(engine);tick(engine)
+    tick(engine)
+    with store.transaction() as db:
+        db.execute("UPDATE nk_jobs SET next_at=next_at+3600 WHERE id=?", (id,))
+    sync_id = engine.sync("tester", full=True)
+    engine.tick()
+    assert store.one("SELECT state FROM nk_jobs WHERE id=?", (sync_id,))["state"] == "confirmed"
+    assert store.one("SELECT card_id FROM nk_cards WHERE good_id=222")["card_id"] == c["id"]
+    assert len(service.cards()) == 2
+    assert service.get(c["id"])["dirty"] == 1
+
+    tick(engine)
     assert store.one("SELECT state FROM nk_jobs WHERE id=?",(id,))["state"]=="confirmed"
     assert service.get(c["id"])["external_id"]=="222"
     assert service.get(c["id"])["gtin"]=="04640000000028"
+    assert service.get(c["id"])["dirty"] == 0
     assert not any(r[1]=="/v3/generate-gtins" for r in remote.requests)
     sent=json.loads(next(r[3] for r in remote.requests if r[1]=="/v3/feed"))
     assert "good_id" not in sent

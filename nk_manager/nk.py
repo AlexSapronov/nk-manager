@@ -305,9 +305,24 @@ class Engine:
         with self.store.transaction() as db:
             existing = db.execute("SELECT card_id FROM nk_cards WHERE good_id=?", (good_id,)).fetchone()
             if existing:
+                if card_id and card_id != existing["card_id"]:
+                    raise Conflict("Карточка НК уже связана с другой локальной записью. Требуется сверка GTIN")
                 card_id = existing["card_id"]
             if not card_id:
                 match = db.execute("SELECT id FROM cards WHERE external_id=?", (str(good_id),)).fetchone()
+                if not match and gtin:
+                    # Sync can see a newly created product before its feed is checked.
+                    # Keep its remote snapshot with the draft that sent that GTIN.
+                    gtin_forms = tuple(gtin.lstrip("0").zfill(width) for width in (8, 12, 13, 14))
+                    pending = db.execute("""SELECT c.id FROM cards c
+                        WHERE c.gtin IN (?, ?, ?, ?) AND c.external_id IS NULL
+                          AND NOT EXISTS (SELECT 1 FROM nk_cards n WHERE n.card_id=c.id)
+                          AND EXISTS (SELECT 1 FROM nk_jobs j WHERE j.card_id=c.id AND j.kind='save'
+                            AND j.state IN ('dispatching','submitted','checking','unknown')
+                            AND json_extract(j.payload, '$.entry.gtin')=c.gtin)
+                        LIMIT 2""", gtin_forms).fetchall()
+                    if len(pending) == 1:
+                        match = pending[0]
                 if not match and gtin:
                     match = db.execute("SELECT c.id FROM source_keys s JOIN cards c ON c.id=s.card_id WHERE s.key=? AND c.external_id IS NULL", ("gtin:"+gtin.zfill(14),)).fetchone()
                 card_id = match["id"] if match else uid()
@@ -598,7 +613,9 @@ class Engine:
                         self.state(job["id"], "unknown" if current["state"]=="dispatching" else "failed", error=str(error))
                 except (ValueError, KeyError, TypeError) as error:
                     current = self.store.one("SELECT state FROM nk_jobs WHERE id=?", (job["id"],))
-                    self.state(job["id"], "unknown" if current["state"]=="dispatching" else "failed", error="Операция остановлена: "+str(error)[:1000])
+                    after_dispatch = current["state"] == "dispatching" or (
+                        isinstance(error, Conflict) and current["state"] in ("submitted", "checking"))
+                    self.state(job["id"], "unknown" if after_dispatch else "failed", error="Операция остановлена: "+str(error)[:1000])
 
             from .draft_workflow import advance
             advance(self)
