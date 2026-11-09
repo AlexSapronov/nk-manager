@@ -3,6 +3,7 @@
 The minimal feed is experimental: some NK installations reject missing
 first-layer fields. A 4xx rejection must stay visible and NEVER be retried.
 """
+from datetime import datetime, timezone
 import json
 import time
 
@@ -66,14 +67,13 @@ def feed_body(gtin):
 
 
 def tick(engine,job):
-    from .nk import RemoteError
+    from .gtin_recovery import find_by_gtin
     payload=json.loads(job['payload'])
     gtin=payload['gtin']
     if job['state']=='prepared':
         if not engine.config().get('writes_enabled'):
             return
         # On each prepared command, preflight a genuine GTIN-based lookup.
-        from .gtin_recovery import find_by_gtin
         raw=find_by_gtin(engine,gtin)
         if raw:
             engine.state(job['id'],'confirmed',{'already_exists':True,'raw':raw})
@@ -96,6 +96,12 @@ def tick(engine,job):
     if not job['external_id']:
         engine.state(job['id'],'unknown',error='Нет ID отправленного фида. Требуется ручная сверка')
         return
+    receipt = engine.store.one("SELECT created FROM nk_receipts WHERE job_id=? AND state='submitted' ORDER BY id LIMIT 1",
+                               (job['id'],))
+    sent_at = datetime.fromisoformat(receipt['created'] if receipt else job['created'])
+    if (datetime.now(timezone.utc) - sent_at).total_seconds() >= 900:
+        engine.state(job['id'], 'unknown', error='НК не подтвердил импорт GTIN за 15 минут. Сверьте карточку по GTIN')
+        return
     response=engine.client.call('GET','/v3/feed-status',{'feed_id':job['external_id'],'verbose':'true'})
     if not isinstance(response,dict):
         raise ValueError('НК вернул недопустимый формат статуса фида')
@@ -105,16 +111,27 @@ def tick(engine,job):
     if response.get('status')=='Processing':
         engine.state(job['id'],'submitted',response,next_at=time.time()+15)
         return
-    from .gtin_recovery import find_by_gtin
     raw=find_by_gtin(engine,gtin)
     if raw:
         engine.state(job['id'],'confirmed',{'feed':response,'raw':raw})
         return
     # Feed may be accepted before the generated draft becomes queryable.
-    # Stop polling eventually; still NEVER automatically POST again.
-    from datetime import datetime, timezone
-    age=(datetime.now(timezone.utc)-datetime.fromisoformat(job['created'])).total_seconds()
-    if age>900:
-        engine.state(job['id'],'unknown',response,error='Фид принят, но карточка по GTIN не появилась за 15 минут; сверить вручную')
-    else:
-        engine.state(job['id'],'submitted',response,error='Фид принят; ожидаем появление карточки с данными GS1',next_at=time.time()+20)
+    engine.state(job['id'],'submitted',response,error='Фид принят; ожидаем появление карточки с данными GS1',next_at=time.time()+20)
+
+
+def reconcile(engine, job, payload):
+    from .gtin_recovery import find_by_gtin
+
+    raw = find_by_gtin(engine, payload['gtin'])
+    if not raw:
+        raise Conflict('Карточка с этим GTIN пока отсутствует в НК')
+    # Reopen an attention row only while the party can still accept drafts.
+    with engine.store.transaction() as db:
+        batch_id = payload['batch_id']
+        row = db.execute("""UPDATE nk_recovery_rows SET state='probing', error=''
+            WHERE batch_id=? AND probe_job=? AND state='attention'
+            AND EXISTS(SELECT 1 FROM nk_recovery_batches WHERE id=? AND state IN ('preview','probing','scanning'))""",
+            (batch_id, job['id'], batch_id))
+        if row.rowcount:
+            db.execute("UPDATE nk_recovery_batches SET state='probing' WHERE id=?", (batch_id,))
+    engine.state(job['id'], 'confirmed', {'reconciled': True, 'raw': raw})

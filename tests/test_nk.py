@@ -187,6 +187,49 @@ def test_feed_received_does_not_prove_values_changed(env):
     assert current(service)["attributes"]["Страна [#1]"]=="FR"
 
 
+def test_active_operation_is_reused_only_for_the_same_action(env):
+    store, service, engine, *_ = env
+    card = current(service)
+    job_id = engine.prepare("tester", "moderate", card["id"], card["revision"])
+    assert engine.prepare("tester", "moderate", card["id"], card["revision"]) == job_id
+    with pytest.raises(Conflict, match="другая операция"):
+        engine.prepare("tester", "publish", card["id"], card["revision"])
+    assert store.one("SELECT COUNT(*) AS count FROM nk_jobs WHERE card_id=?", (card["id"],))["count"] == 1
+
+
+def test_paused_writes_do_not_starve_catalog_sync(env):
+    store, service, engine, remote, *_ = env
+    jobs = []
+    for number in range(5):
+        card = service.save("tester", {"pn": f"PAUSED-{number}"})
+        jobs.append(engine.prepare("tester", "gtin", card["id"], card["revision"]))
+    engine.save_config("tester", {"writes_enabled": False})
+
+    sync_id = engine.sync("tester", full=True)
+    tick(engine)
+
+    assert store.one("SELECT state FROM nk_jobs WHERE id=?", (sync_id,))["state"] == "confirmed"
+    assert all(store.one("SELECT state FROM nk_jobs WHERE id=?", (id,))["state"] == "prepared" for id in jobs)
+    assert not any(request[1] == "/v3/generate-gtins" for request in remote.requests)
+
+
+def test_reconciliation_cannot_reopen_confirmed_save_and_overwrite_new_edits(env):
+    store, service, engine, _, *_ = env
+    card = edit(env)
+    job_id = engine.prepare("tester", "save", card["id"], card["revision"])
+    tick(engine)
+    tick(engine)
+    assert store.one("SELECT state FROM nk_jobs WHERE id=?", (job_id,))["state"] == "confirmed"
+    card = service.get(card["id"])
+    card["attributes"]["Страна [#1]"] = "CN"
+    saved = service.save("tester", card, card["id"])
+
+    with pytest.raises(Conflict, match="Сверка доступна"):
+        engine.reconcile("tester", job_id)
+    tick(engine)
+    assert service.get(card["id"]) == saved
+
+
 def test_remote_conflict_and_sync_preserve_local_base(env):
     store,service,engine,remote,*_=env
     card=edit(env)

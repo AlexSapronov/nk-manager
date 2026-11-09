@@ -1,6 +1,6 @@
 /* UI for actual NK API operations. No credentials in profile/catalog exports. */
 window.NkUI = (() => {
- const jobNames={rebuild:'Полная перестройка каталога',sync:'Синхронизация',save:'Сохранение в НК',moderate:'Модерация',publish:'Подпись и публикация',gtin:'Получение GTIN'};
+ const jobNames={rebuild:'Полная перестройка каталога',sync:'Синхронизация',save:'Сохранение в НК',moderate:'Модерация',publish:'Подпись и публикация',gtin:'Получение GTIN',gs1_probe:'Пробный импорт GS1'};
  const states={prepared:'Подготовлено',dispatching:'Отправляется',submitted:'Ожидается подтверждение НК',confirmed:'Подтверждено',signing:'Ожидает Windows-подписанта',signed:'Подписано, ожидает отправки',unknown:'Исход неизвестен — нужна сверка',failed:'Остановлено с ошибкой',cancelled:'Остановлено до отправки'};
  async function refreshStatus(){
   if(!state.user)return;
