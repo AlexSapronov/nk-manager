@@ -305,9 +305,24 @@ class Engine:
         with self.store.transaction() as db:
             existing = db.execute("SELECT card_id FROM nk_cards WHERE good_id=?", (good_id,)).fetchone()
             if existing:
+                if card_id and card_id != existing["card_id"]:
+                    raise Conflict("Карточка НК уже связана с другой локальной записью. Требуется сверка GTIN")
                 card_id = existing["card_id"]
             if not card_id:
                 match = db.execute("SELECT id FROM cards WHERE external_id=?", (str(good_id),)).fetchone()
+                if not match and gtin:
+                    # Sync can see a newly created product before its feed is checked.
+                    # Keep its remote snapshot with the draft that sent that GTIN.
+                    gtin_forms = tuple(gtin.lstrip("0").zfill(width) for width in (8, 12, 13, 14))
+                    pending = db.execute("""SELECT c.id FROM cards c
+                        WHERE c.gtin IN (?, ?, ?, ?) AND c.external_id IS NULL
+                          AND NOT EXISTS (SELECT 1 FROM nk_cards n WHERE n.card_id=c.id)
+                          AND EXISTS (SELECT 1 FROM nk_jobs j WHERE j.card_id=c.id AND j.kind='save'
+                            AND j.state IN ('dispatching','submitted','checking','unknown')
+                            AND json_extract(j.payload, '$.entry.gtin')=c.gtin)
+                        LIMIT 2""", gtin_forms).fetchall()
+                    if len(pending) == 1:
+                        match = pending[0]
                 if not match and gtin:
                     match = db.execute("SELECT c.id FROM source_keys s JOIN cards c ON c.id=s.card_id WHERE s.key=? AND c.external_id IS NULL", ("gtin:"+gtin.zfill(14),)).fetchone()
                 card_id = match["id"] if match else uid()
@@ -388,9 +403,11 @@ class Engine:
                 raise Conflict("Ревизия изменилась или карточка остановлена")
             if card["owner"] not in (actor, "") and not admin:
                 raise Conflict("Карточку взял другой сотрудник")
-            current_jobs = self.store.one("SELECT id FROM nk_jobs WHERE card_id=? AND state NOT IN ('confirmed','failed','cancelled')", (card_id,))
-            if current_jobs:
-                return current_jobs["id"]
+            active = self.store.one("SELECT id,kind,revision FROM nk_jobs WHERE card_id=? AND state NOT IN ('confirmed','failed','cancelled')", (card_id,))
+            if active:
+                if active["kind"] == kind and active["revision"] == revision:
+                    return active["id"]
+                raise Conflict("По карточке выполняется другая операция НК. Дождитесь результата или выполните сверку")
             all_cards = self.store.all("SELECT id,pn,gtin,name,external_status FROM cards")
             matches = candidates(card["pn"], card["gtin"], all_cards, card_id)
             if kind in ("save","gtin") and not self.store.one("SELECT card_id FROM nk_cards WHERE card_id=?",(card_id,)) and matches and not str(options.get("duplicate_reason", "")).strip():
@@ -567,7 +584,12 @@ class Engine:
         with self.lock:
             if time.time()<self.client.retry_until:
                 return
-            jobs = self.store.all("SELECT * FROM nk_jobs WHERE state IN ('prepared','signed') AND next_at<=? ORDER BY created LIMIT 5", (time.time(),))+self.store.all("SELECT * FROM nk_jobs WHERE state IN ('submitted','checking') AND next_at<=? ORDER BY updated LIMIT 5",(time.time(),))
+            due = time.time()
+            jobs = self.store.all("""SELECT * FROM nk_jobs WHERE state IN ('prepared','signed')
+                AND next_at<=? AND (? OR kind IN ('sync','rebuild')) ORDER BY created LIMIT 5""",
+                (due, self.config().get("writes_enabled", False)))
+            jobs += self.store.all("""SELECT * FROM nk_jobs WHERE state IN ('submitted','checking')
+                AND next_at<=? ORDER BY updated LIMIT 5""", (due,))
             for job in jobs:
                 try:
                     if job["kind"] in ("sync","rebuild"):
@@ -591,7 +613,9 @@ class Engine:
                         self.state(job["id"], "unknown" if current["state"]=="dispatching" else "failed", error=str(error))
                 except (ValueError, KeyError, TypeError) as error:
                     current = self.store.one("SELECT state FROM nk_jobs WHERE id=?", (job["id"],))
-                    self.state(job["id"], "unknown" if current["state"]=="dispatching" else "failed", error="Операция остановлена: "+str(error)[:1000])
+                    after_dispatch = current["state"] == "dispatching" or (
+                        isinstance(error, Conflict) and current["state"] in ("submitted", "checking"))
+                    self.state(job["id"], "unknown" if after_dispatch else "failed", error="Операция остановлена: "+str(error)[:1000])
 
             from .draft_workflow import advance
             advance(self)
@@ -807,12 +831,17 @@ class Engine:
     def reconcile(self,actor,id):
         with self.lock:
             job=self.store.one("SELECT * FROM nk_jobs WHERE id=?",(id,))
-            if not job or job["kind"]=="sync":
+            if not job or job["kind"] in ("sync", "rebuild"):
                 raise ValueError("Нет внешней операции для сверки")
+            if job["state"] not in ("unknown", "submitted", "checking"):
+                raise Conflict("Сверка доступна для отправленных операций, результат которых ещё не подтверждён")
             payload=json.loads(job["payload"])
             if job["kind"]=="gtin":
                 raise Conflict("Неизвестный исход выделения GTIN: сверить выданные коды в НК вручную. Автоповтор запрещён")
-            if job["kind"]=="save" and job["external_id"]:
+            if job["kind"]=="gs1_probe":
+                from .gs1_probe import reconcile as reconcile_probe
+                reconcile_probe(self, job, payload)
+            elif job["kind"]=="save" and job["external_id"]:
                 self.state(id,"submitted",next_at=0)
             else:
                 raw=self.client.details(payload.get("good_id") or payload.get("entry",{}).get("good_id"),payload.get("entry",{}).get("gtin"))

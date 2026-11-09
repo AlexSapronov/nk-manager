@@ -1,6 +1,6 @@
 # Рабочий локальный запуск в WSL2
 
-Версия 0.3.0: API НК и Windows-подписант подключены. **Для обновления уже настроенного пользователя alex и подключения ключа используйте [пошаговую инструкцию](NK-LIVE.md).** Ниже — общие локальные операции.
+Рабочая версия находится в ветке `main`. [Инструкция по обновлению существующей установки, подключению API НК и Windows-подписанта](NK-LIVE.md).
 
 ## Первый запуск
 
@@ -10,20 +10,18 @@
 
 ```bash
 cd ~
-git clone --branch codex/nk-live https://github.com/AlexSapronov/nk-manager.git
+git clone https://github.com/AlexSapronov/nk-manager.git
 cd ~/nk-manager
 ```
 
-Если `~/nk-manager` уже существует, проверьте незакоммиченные изменения через `git status`, затем переключитесь на поставляемую ветку:
+Если `~/nk-manager` уже существует, остановите сервис и сделайте резервную копию каталога данных по [инструкции обновления](NK-LIVE.md). Проверьте локальные изменения через `git status` и обновите рабочую ветку:
 
 ```bash
 cd ~/nk-manager
 git fetch origin
-git switch codex/nk-live
-git pull --ff-only
+git switch main
+git pull --ff-only origin main
 ```
-
-До слияния PR используйте именно эту ветку. После слияния те же файлы доступны в `main`; не смешивайте команды от статического прототипа и рабочего приложения.
 
 ```bash
 sudo apt update && sudo apt install -y python3.12-venv

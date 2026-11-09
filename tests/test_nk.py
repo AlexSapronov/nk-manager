@@ -34,7 +34,7 @@ class NK:
         if path==self.timeout_path:
             raise httpx.ReadTimeout("secret URL must never leak",request=request)
         if path=="/v4/product-list":
-            result={"total":1,"goods":[{"good_id":111}]}
+            result={"total":1,"goods":[{"good_id":self.raw["good_id"]}]}
         elif path=="/v3/feed-product":
             result=[copy.deepcopy(self.raw)]
         elif path=="/v3/attributes":
@@ -187,6 +187,49 @@ def test_feed_received_does_not_prove_values_changed(env):
     assert current(service)["attributes"]["Страна [#1]"]=="FR"
 
 
+def test_active_operation_is_reused_only_for_the_same_action(env):
+    store, service, engine, *_ = env
+    card = current(service)
+    job_id = engine.prepare("tester", "moderate", card["id"], card["revision"])
+    assert engine.prepare("tester", "moderate", card["id"], card["revision"]) == job_id
+    with pytest.raises(Conflict, match="другая операция"):
+        engine.prepare("tester", "publish", card["id"], card["revision"])
+    assert store.one("SELECT COUNT(*) AS count FROM nk_jobs WHERE card_id=?", (card["id"],))["count"] == 1
+
+
+def test_paused_writes_do_not_starve_catalog_sync(env):
+    store, service, engine, remote, *_ = env
+    jobs = []
+    for number in range(5):
+        card = service.save("tester", {"pn": f"PAUSED-{number}"})
+        jobs.append(engine.prepare("tester", "gtin", card["id"], card["revision"]))
+    engine.save_config("tester", {"writes_enabled": False})
+
+    sync_id = engine.sync("tester", full=True)
+    tick(engine)
+
+    assert store.one("SELECT state FROM nk_jobs WHERE id=?", (sync_id,))["state"] == "confirmed"
+    assert all(store.one("SELECT state FROM nk_jobs WHERE id=?", (id,))["state"] == "prepared" for id in jobs)
+    assert not any(request[1] == "/v3/generate-gtins" for request in remote.requests)
+
+
+def test_reconciliation_cannot_reopen_confirmed_save_and_overwrite_new_edits(env):
+    store, service, engine, _, *_ = env
+    card = edit(env)
+    job_id = engine.prepare("tester", "save", card["id"], card["revision"])
+    tick(engine)
+    tick(engine)
+    assert store.one("SELECT state FROM nk_jobs WHERE id=?", (job_id,))["state"] == "confirmed"
+    card = service.get(card["id"])
+    card["attributes"]["Страна [#1]"] = "CN"
+    saved = service.save("tester", card, card["id"])
+
+    with pytest.raises(Conflict, match="Сверка доступна"):
+        engine.reconcile("tester", job_id)
+    tick(engine)
+    assert service.get(card["id"]) == saved
+
+
 def test_remote_conflict_and_sync_preserve_local_base(env):
     store,service,engine,remote,*_=env
     card=edit(env)
@@ -244,14 +287,25 @@ def test_cms_and_lease_protection(env):
     assert store.one("SELECT state FROM nk_jobs WHERE id=?",(id,))["state"]=="signing"
 
 
-def test_create_uses_provided_gtin_and_confirmed_remote_id(env):
+def test_create_keeps_local_card_when_sync_sees_gtin_before_feed_confirmation(env):
     store,service,engine,remote,*_=env
     c=service.save("tester",{"pn":"INDEPENDENT-MODEL","name":"Другой товар","gtin":"04640000000028","tnved":"8536901000","card_type":"unit","attributes":{"Модель / артикул [#2]":"INDEPENDENT-MODEL"}})
     id=engine.prepare("tester","save",c["id"],c["revision"],{"cat_id":123,"brand":"BRAND"})
-    tick(engine);tick(engine)
+    tick(engine)
+    with store.transaction() as db:
+        db.execute("UPDATE nk_jobs SET next_at=next_at+3600 WHERE id=?", (id,))
+    sync_id = engine.sync("tester", full=True)
+    engine.tick()
+    assert store.one("SELECT state FROM nk_jobs WHERE id=?", (sync_id,))["state"] == "confirmed"
+    assert store.one("SELECT card_id FROM nk_cards WHERE good_id=222")["card_id"] == c["id"]
+    assert len(service.cards()) == 2
+    assert service.get(c["id"])["dirty"] == 1
+
+    tick(engine)
     assert store.one("SELECT state FROM nk_jobs WHERE id=?",(id,))["state"]=="confirmed"
     assert service.get(c["id"])["external_id"]=="222"
     assert service.get(c["id"])["gtin"]=="04640000000028"
+    assert service.get(c["id"])["dirty"] == 0
     assert not any(r[1]=="/v3/generate-gtins" for r in remote.requests)
     sent=json.loads(next(r[3] for r in remote.requests if r[1]=="/v3/feed"))
     assert "good_id" not in sent

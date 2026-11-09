@@ -1,14 +1,17 @@
 """Regression tests: previously registered GTINs are never allocated twice."""
 import copy
+from datetime import datetime, timedelta
 import json
 from io import BytesIO
 
 import httpx
+import pytest
 from openpyxl import Workbook, load_workbook
 from fastapi.testclient import TestClient
 
 from nk_manager.gtin_recovery import preview, start, snapshot, export
 from nk_manager.nk import Engine
+from nk_manager.service import Conflict
 from nk_manager.creation import baseline, NAMES
 from tests.test_nk import NK, env, tick
 from tests.test_service import app, login, ORIGIN, gtin
@@ -204,17 +207,54 @@ def test_probe_is_not_retried_when_nk_rejects_minimal_feed(env):
     final=snapshot(store,batch['id'])
     assert final['rows'][0]['state']=='probe_error'
     assert remote.feeds==1
-    from nk_manager.service import Conflict
-    import pytest
     with pytest.raises(Conflict):
         enqueue(engine,'tester',batch['id'],[2])
     assert remote.allocations==0
 
 
+def test_processing_probe_times_out_and_can_be_reconciled_without_resending(env, monkeypatch):
+    from nk_manager import gs1_probe
+
+    store, _, engine, *_ = env
+    remote = RecoveryNK(present=False)
+
+    def handle(request):
+        if request.url.path == '/v3/feed-status':
+            return httpx.Response(200, json={'result': {'status': 'Processing'}})
+        return remote.handle(request)
+
+    engine.client.transport = httpx.MockTransport(handle)
+    batch = preview(engine, 'tester', xlsx([[gtin(45), 'MORNSUN']]), 'processing.xlsx')
+    tick(engine)
+    job_id, = gs1_probe.enqueue(engine, 'tester', batch['id'], [2])
+    tick(engine)
+    tick(engine)
+    assert snapshot(store, batch['id'])['state'] == 'probing'
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) + timedelta(minutes=16)
+
+    monkeypatch.setattr(gs1_probe, 'datetime', Clock)
+    tick(engine)
+    assert snapshot(store, batch['id'])['rows'][0]['state'] == 'attention'
+    assert snapshot(store, batch['id'])['state'] == 'preview'
+    assert store.one('SELECT state FROM nk_jobs WHERE id=?', (job_id,))['state'] == 'unknown'
+
+    published_later = remote.good
+    remote.good = None
+    with pytest.raises(Conflict, match='пока отсутствует'):
+        engine.reconcile('tester', job_id)
+    remote.good = published_later
+    engine.reconcile('tester', job_id)
+    tick(engine)
+    assert snapshot(store, batch['id'])['rows'][0]['state'] == 'ready'
+    assert remote.feeds == 1
+
+
 def test_recovery_probe_prevents_repeated_gtin_across_different_files(env):
     from nk_manager.gs1_probe import enqueue
-    from nk_manager.service import Conflict
-    import pytest
     store,_,engine,*_=env
     remote=RecoveryNK(present=False)
     engine.client.transport=httpx.MockTransport(remote.handle)
